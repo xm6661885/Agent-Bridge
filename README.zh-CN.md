@@ -215,4 +215,8 @@ cd web && pnpm build
 
 ## 致谢
 
-基于 chenhg5 及贡献者的 [cc-connect](https://github.com/chenhg5/cc-connect)。原始许可条款请参阅上游仓库。
+基于 chenhg5 及贡献者的 [cc-connect](https://github.com/chenhg5/cc-connect)。
+
+## 许可证
+
+[MIT](LICENSE)，保留 cc-connect 原版权声明。

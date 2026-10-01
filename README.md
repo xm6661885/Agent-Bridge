@@ -215,4 +215,8 @@ See [AGENTS.md](AGENTS.md) for contribution constraints.
 
 ## Credits
 
-Based on [cc-connect](https://github.com/chenhg5/cc-connect) by chenhg5 and contributors. Please refer to the upstream repository for its original license terms.
+Based on [cc-connect](https://github.com/chenhg5/cc-connect) by chenhg5 and contributors. 
+
+## License
+
+[MIT](LICENSE). The original cc-connect copyright notice is retained.
