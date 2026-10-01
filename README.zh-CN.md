@@ -23,7 +23,12 @@ Agent-Bridge 把本地 AI 编程 Agent（**Claude Code**、**Codex**）连接到
 
 ## 与 cc-connect 的区别
 
-- 只保留 Claude Code、Codex 两种 Agent，以及微信、飞书、Telegram、QQ 平台。
+- 精简消息渠道，只保留微信、飞书、Telegram、QQ（精简的是渠道而非 Agent 支持）。
+- 优化文件传送逻辑：附件暂存后随下一条提示可靠地交给 Agent。
+- Agent 运行中发送的消息会 steer 当前对话，而不是排队（queue）。
+- `/reasoning` 改为 `/effort`，调整后续接原会话。
+- 优化提示文案，去除 emoji。
+- QQ 支持群聊白名单（`allow_groups`）和群内仅被 @ 时回复。
 - 删除内置 cron、timer、Agent heartbeat；定时任务请用外部调度器调用 webhook 或 `agent-bridge send`。
 - 删除多机器人中继、`/bind` 与 `relay send`。
 - 不注入任何提示词，项目说明写在 `CLAUDE.md` / `AGENTS.md`。Claude Code 只透传你显式配置的 `system_prompt` / `append_system_prompt`。

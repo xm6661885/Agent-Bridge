@@ -23,7 +23,12 @@ Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to 
 
 ## Differences from cc-connect
 
-- Only Claude Code and Codex agents; only Weixin, Feishu, Telegram, and QQ platforms.
+- Trimmed messaging channels down to Weixin, Feishu, Telegram, and QQ (agent support was not the focus of the trimming).
+- Reworked file transfer logic: attachments are staged and delivered with the next prompt more reliably.
+- Messages sent while the agent is running steer the current turn instead of being queued.
+- `/reasoning` renamed to `/effort`; changing effort resumes the existing conversation.
+- Polished user-facing messages and removed emoji.
+- QQ: group whitelist (`allow_groups`) and reply-only-when-@mentioned in groups.
 - Removed built-in cron, timers, and agent heartbeat. Use an external scheduler that calls the webhook or `agent-bridge send`.
 - Removed multi-bot relay, `/bind`, and `relay send`.
 - No prompt injection of any kind. Put project instructions in `CLAUDE.md` / `AGENTS.md`. Claude Code only receives the `system_prompt` / `append_system_prompt` you configure explicitly.
