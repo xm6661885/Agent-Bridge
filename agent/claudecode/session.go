@@ -1,0 +1,1389 @@
+package claudecode
+
+import (
+	"bufio"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"agent-bridge/core"
+	"github.com/google/uuid"
+)
+
+// claudeSession manages a long-running Claude Code process using
+// --input-format stream-json and --permission-prompt-tool stdio.
+//
+// In "auto" mode, permission requests are auto-approved internally
+// (avoiding --dangerously-skip-permissions which fails under root).
+type claudeSession struct {
+	cmd             *exec.Cmd
+	stdin           io.WriteCloser
+	stdinMu         sync.Mutex
+	events          chan core.Event
+	sessionID       atomic.Value // stores string
+	permissionMode  atomic.Value // stores string
+	autoApprove     atomic.Bool
+	acceptEditsOnly atomic.Bool
+	dontAsk         atomic.Bool
+	workDir         string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	alive           atomic.Bool
+
+	// activeModel stores the model id reported by the CLI's init event (e.g.
+	// "claude-opus-4-7[1m]"). It may be empty if the init event hasn't
+	// carried a model field yet; callers should fall back to the Agent's
+	// configured model.
+	activeModel atomic.Value // stores string
+
+	// usageMu guards lastUsage. Populated from the most recent result event.
+	usageMu   sync.Mutex
+	lastUsage *core.ContextUsage
+
+	// gracefulStopTimeout is how long Close() waits for a clean exit
+	// (stdin close → Stop hooks → process exit) before escalating to
+	// SIGTERM and then SIGKILL. Default: 120s to match claude-mem's
+	// Stop hook timeout. The wait ends as soon as the process exits,
+	// so typical shutdowns take seconds, not the full timeout.
+	gracefulStopTimeout time.Duration
+	ccHooks             *ccPermissionHookRunner // Claude Code PermissionRequest hook runner
+
+	// startupWarning holds a one-time message to surface to the IM user at
+	// session start (e.g. when a permission mode was silently downgraded).
+	startupWarning string
+
+	// promptFilePath is the per-spawn temp file holding the merged
+	// content for --append-system-prompt-file when this session needs
+	// platform- or user-specific append text that the shared
+	// agent-bridge-system.md cannot represent. Removed on Close. Empty
+	// when the session reuses the shared file (the common 99% case)
+	// or when there is nothing to append.
+	promptFilePath string
+
+	// turnDoneCh is armed by Send() at the start of each turn and closed by
+	// handleResult when that turn's terminal EventResult fires. CancelTurn
+	// waits on it (without reading from events, which processInteractiveEvents
+	// owns during a live turn) to know when a non-destructive interrupt has
+	// actually taken effect.
+	turnDoneMu sync.Mutex
+	turnDoneCh chan struct{}
+}
+
+// StartupWarning implements core.StartupWarner. Returns a non-empty string
+// when the session was started under degraded conditions that the user should
+// know about (e.g. bypassPermissions downgraded to auto under root).
+func (cs *claudeSession) StartupWarning() string { return cs.startupWarning }
+
+// writeTempAppendPromptFile writes the user-configured append_system_prompt
+// to a per-spawn temp file under ccDataDir/agent-prompts/, returning the
+// path. A unique name from CreateTemp
+// avoids two concurrent customised sessions overwriting each other.
+//
+// The caller is responsible for removing the file on session Close.
+func writeTempAppendPromptFile(ccDataDir, content string) (string, error) {
+	base := ccDataDir
+	if base == "" {
+		base = os.TempDir()
+	}
+	dir := filepath.Join(base, "agent-prompts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, "agent-bridge-system-*.md")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	// os.CreateTemp defaults to mode 0600 owned by the agent-bridge process
+	// user (often root when launched by systemd). When the agent is spawned
+	// under run_as_user, the target user is different and gets EACCES on
+	// 0600 root-owned files (issue #1429). The prompt is operator config,
+	// not a secret, so make it world-readable.
+	if err := f.Chmod(0o644); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("claudecode: chmod per-spawn prompt file 0o644: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
+	sessionCtx, cancel := context.WithCancel(ctx)
+
+	// Claude Code rejects bypassPermissions when running as root.
+	// Downgrade to "auto" which auto-approves internally in agent-bridge.
+	var rootDowngradeWarning string
+	if mode == "bypassPermissions" && os.Geteuid() == 0 {
+		slog.Warn("claudeSession: bypassPermissions not allowed under root, downgrading to auto mode")
+		mode = "auto"
+		rootDowngradeWarning = "Running as root: bypassPermissions mode is not supported and has been downgraded to auto. The agent may still pause on high-risk operations."
+	}
+
+	// innerArgs are Claude Code CLI flags — when a wrapper is used with
+	// cmdArgsFlag these get bundled into a single passthrough string.
+	// outerArgs are flags the wrapper itself understands (e.g. --model).
+	//
+	// We intentionally do NOT pass `--replay-user-messages`: that flag tells
+	// Claude Code to drain queued stdin messages and exit, which breaks any
+	// subsequent in-session slash command such as `/compact`, `/clear`, or
+	// `/resume` — issue #1736. Without it the CLI keeps reading stdin until
+	// either the user closes the session or `agent_session_idle_timeout_mins`
+	// (#1338) reaps the idle process; both paths are already handled by the
+	// engine and Close() below.
+	innerArgs := []string{
+		"--output-format", "stream-json",
+		"--input-format", "stream-json",
+		"--permission-prompt-tool", "stdio",
+	}
+	if !disableVerbose {
+		innerArgs = append(innerArgs, "--verbose")
+	}
+
+	if mode != "" && mode != "default" {
+		innerArgs = append(innerArgs, "--permission-mode", mode)
+	}
+	switch sessionID {
+	case "", core.ContinueSession:
+		// Truly fresh session — no resume, no continue.
+	default:
+		// Resuming a known session ID — this is agent-bridge's own session
+		// from a previous connection, safe to resume directly.
+		innerArgs = append(innerArgs, "--resume", sessionID)
+	}
+	if len(allowedTools) > 0 {
+		innerArgs = append(innerArgs, "--allowedTools", strings.Join(allowedTools, ","))
+	}
+	if len(disallowedTools) > 0 {
+		innerArgs = append(innerArgs, "--disallowedTools", strings.Join(disallowedTools, ","))
+	}
+
+	// Load plugins from specified directories.
+	for _, dir := range pluginDirs {
+		innerArgs = append(innerArgs, "--plugin-dir", dir)
+	}
+
+	// Handle custom system prompt (replaces Claude's default system prompt).
+	if systemPrompt != "" {
+		innerArgs = append(innerArgs, "--system-prompt", systemPrompt)
+	}
+
+	// Pass the user's append_system_prompt via a per-spawn file to avoid
+	// the Windows 8192-byte command-line limit (#1376). The file is removed
+	// on Close.
+	var promptFilePath string
+	if appendSystemPrompt != "" {
+		path, err := writeTempAppendPromptFile(ccDataDir, appendSystemPrompt)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("claudeSession: write per-spawn prompt file: %w", err)
+		}
+		promptFilePath = path
+		innerArgs = append(innerArgs, "--append-system-prompt-file", promptFilePath)
+	}
+
+	if effort != "" {
+		innerArgs = append(innerArgs, "--effort", effort)
+	}
+	if maxContextTokens > 0 {
+		innerArgs = append(innerArgs, "--max-context-tokens", strconv.Itoa(maxContextTokens))
+	}
+
+	// outerArgs are understood by both the wrapper and Claude CLI directly.
+	var outerArgs []string
+	if model != "" {
+		outerArgs = append(outerArgs, "--model", model)
+	}
+
+	slog.Debug("claudeSession: starting", "innerArgs", core.RedactArgs(innerArgs), "outerArgs", core.RedactArgs(outerArgs), "dir", workDir, "mode", mode, "run_as_user", spawnOpts.RunAsUser)
+
+	// Per-spawn defense in depth: if run_as_user is set, re-run the cheap
+	// preflight (sudo still works + target still can't escalate) right
+	// before we build the command. This catches sudoers being edited
+	// between startup preflight and now.
+	if spawnOpts.IsolationMode() {
+		verifyCtx, verifyCancel := context.WithTimeout(sessionCtx, 10*time.Second)
+		err := core.VerifyRunAsUserCheap(verifyCtx, core.ExecSudoRunner{}, spawnOpts.RunAsUser)
+		verifyCancel()
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("claudeSession: run_as_user spawn refused: %w", err)
+		}
+	}
+
+	// Build final argument list.
+	// When cmdArgsFlag is set (e.g. "-a"), inner args are bundled into a
+	// single passthrough string via that flag, while outer args (--model etc.)
+	// are appended directly so the wrapper can also interpret them.
+	// Args containing spaces/newlines are quoted so the wrapper's command-line
+	// parser (e.g. splitCommandLine) keeps them as single tokens.
+	// Result: my-cli code -t foo -a "--verbose --append-system-prompt 'long text'" --model x
+	var allArgs []string
+	if cmdArgsFlag != "" {
+		allArgs = append(allArgs, cliExtraArgs...)
+		allArgs = append(allArgs, cmdArgsFlag, shellJoinArgs(innerArgs))
+		allArgs = append(allArgs, outerArgs...)
+	} else {
+		allArgs = append(allArgs, cliExtraArgs...)
+		allArgs = append(allArgs, innerArgs...)
+		allArgs = append(allArgs, outerArgs...)
+	}
+	// Under run_as_user isolation, sudo -i ignores cmd.Dir (it chdirs to the
+	// target user's HOME), so the workspace must be re-applied inside the
+	// spawn. WorkDir tells BuildSpawnCommand to wrap the command with a chdir;
+	// the path itself is passed through RunAsChdirEnv below.
+	spawnOpts.WorkDir = workDir
+	cmd := core.BuildSpawnCommand(sessionCtx, spawnOpts, cliBin, allArgs...)
+	cmd.Dir = workDir
+	// Put the child into its own process group so Close() can terminate the
+	// entire descendant tree (claude CLI → MCP server bridges → ...) with a
+	// single signal. Without this, killing only the direct child can leave
+	// MCP grandchildren (e.g. the Telegram bridge bun process) spinning at
+	// 100% CPU after their parent's stdio pipe closes.
+	prepareCmdForKill(cmd)
+	// Filter out CLAUDECODE env var to prevent "nested session" detection,
+	// since agent-bridge is a bridge, not a nested Claude Code session.
+	env := filterEnv(os.Environ(), "CLAUDECODE")
+	if len(extraEnv) > 0 {
+		env = core.MergeEnv(env, extraEnv)
+	}
+	// Signal to PermissionRequest hooks that they are running inside
+	// agent-bridge. Hooks can check this env var to skip LLM calls on
+	// the Claude Code side (the hook result is ignored anyway when
+	// --permission-prompt-tool stdio is active). agent-bridge runs the
+	// hook itself without this env var, so the real work happens only
+	// once.
+	env = core.MergeEnv(env, []string{"AGENT_BRIDGE_PERMISSION_HOOK_SKIP=1"})
+	// Carry the intended working directory across the sudo -i boundary so the
+	// re-chdir wrapper in BuildSpawnCommand can restore it (sudo -i would
+	// otherwise leave the agent in the target user's HOME). Only meaningful
+	// under isolation; FilterEnvForSpawn keeps it because mergedAllowlist
+	// includes RunAsChdirEnv whenever WorkDir is set.
+	if spawnOpts.IsolationMode() && workDir != "" {
+		env = core.MergeEnv(env, []string{core.RunAsChdirEnv + "=" + workDir})
+	}
+	// When run_as_user is set, strip the supervisor's environment down to
+	// the allowlist before passing it to sudo. sudo --preserve-env also
+	// enforces this, but filtering here makes the agent-bridge spawn argv
+	// the single source of truth.
+	env = core.FilterEnvForSpawn(env, spawnOpts)
+	cmd.Env = env
+
+	var providerEnvSnapshot []string
+	for _, e := range env {
+		for _, prefix := range []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "NO_PROXY", "DISABLE_"} {
+			if strings.HasPrefix(e, prefix) {
+				providerEnvSnapshot = append(providerEnvSnapshot, e)
+				break
+			}
+		}
+	}
+	slog.Debug("claudeSession: spawn details",
+		"bin", cliBin,
+		"allArgs", core.RedactArgs(allArgs),
+		"model", model,
+		"providerEnv", core.RedactEnv(providerEnvSnapshot))
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("claudeSession: stdin pipe: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("claudeSession: stdout pipe: %w", err)
+	}
+
+	stderrBuf := &claudeDiagnosticWriter{}
+	cmd.Stderr = stderrBuf
+
+	// 🔴 /stop「杀不死」的根因修复（2026-07-29）。
+	//
+	// 症状：taskkill /T /F 报成功，Close() 却在 10 秒后返回
+	// "process tree (pid N) still alive 10s after SIGKILL reported success"，
+	// engine 于是认定 teardown 失败 —— 用户按了 /stop，却像在跟另一个 session 说话。
+	//
+	// 机制：上面这行把 stderr 接到 *bytes.Buffer（不是 *os.File），os/exec 因此会
+	// 自建一条管道 + 一个 io.Copy goroutine。**cmd.Wait() 不只等进程退出，还要等
+	// 那个 goroutine 结束**，而它要等管道 EOF —— 只要**任何一个孙进程**
+	// （Claude Code 拉起的 MCP server）继承了 stderr 写端还活着，管道就永不 EOF。
+	// 于是：直接子进程早被杀死，Wait() 却永不返回 → cs.done 永不关闭 → Close() 只能超时。
+	// **"还活着"的其实不是进程，是那根没人关的管道。**
+	// （下面 startReadLoopWait 对 stdout 已经做了 50ms 后强关来躲这个坑，
+	//   注释里还写着 "no descendants holding it" —— 唯独 stderr 漏了同样的处理。）
+	//
+	// 证据：同一个仓库的 gemini / kimi / antigravity / hooks **四个适配器全都设了
+	// WaitDelay**（gemini 那行注释：「确保 I/O goroutine 在 context 结束后不会长时间阻塞」）
+	// —— 唯独 claudecode 漏了。这不是新发明，是补上一致性。
+	//
+	// 取 3s 而非兄弟们的 1s：Claude Code 退出时可能还在吐最后一段 stderr（报错栈），
+	// 太短会截掉有用的诊断；而 Close() 的兜底等待是 10s，3s 留足余量。
+	// 超时后 Wait() 返回 ErrWaitDelay 并强制关管道 —— stderr 可能不全，
+	// 但**进程状态是准的**。这正是要的取舍：宁可少一段日志，不要一个杀不死的会话。
+	cmd.WaitDelay = 3 * time.Second
+
+	// Only remember the prompt path for cleanup when it is the per-spawn
+	// temp variant. The shared agent-bridge-system.md file is reused across
+	// all sessions and must never be deleted by an individual session's
+	// Close.
+
+	cs := &claudeSession{
+		cmd:                 cmd,
+		stdin:               stdin,
+		events:              make(chan core.Event, 64),
+		workDir:             workDir,
+		ctx:                 sessionCtx,
+		cancel:              cancel,
+		done:                make(chan struct{}),
+		gracefulStopTimeout: defaultGracefulStopTimeout,
+		ccHooks:             newCCPermissionHookRunner(workDir),
+		startupWarning:      rootDowngradeWarning,
+		promptFilePath:      promptFilePath,
+	}
+	cs.setPermissionMode(mode)
+	cs.sessionID.Store(sessionID)
+	cs.alive.Store(true)
+	stderrBuf.emit = func(content string) {
+		select {
+		case cs.events <- core.Event{Type: core.EventStatus, Content: content}:
+		case <-cs.ctx.Done():
+		default: // Diagnostics must not block subprocess I/O or teardown.
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		if promptFilePath != "" {
+			_ = os.Remove(promptFilePath)
+		}
+		cancel()
+		return nil, fmt.Errorf("claudeSession: start: %w", err)
+	}
+
+	go cs.readLoop(stdout, stderrBuf)
+
+	return cs, nil
+}
+
+func (cs *claudeSession) readLoop(stdout io.ReadCloser, stderrBuf interface{ String() string }) {
+	waitErrCh, waitDone := cs.startReadLoopWait(stdout)
+	defer cs.finishReadLoop(waitErrCh, stderrBuf)
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		cs.handleReadLoopLine(scanner.Text())
+	}
+
+	cs.handleReadLoopScanErr(scanner.Err(), waitDone)
+}
+
+func (cs *claudeSession) startReadLoopWait(stdout io.ReadCloser) (<-chan error, <-chan struct{}) {
+	waitErrCh := make(chan error, 1)
+	waitDone := make(chan struct{})
+
+	go func() {
+		waitErrCh <- cs.cmd.Wait()
+		close(waitDone)
+	}()
+
+	go func() {
+		select {
+		case <-cs.ctx.Done():
+			_ = stdout.Close()
+			return
+		case <-waitDone:
+		}
+
+		// Grace period: give scanner a brief window to drain any data the
+		// agent wrote to the pipe buffer before exiting. If scanner finishes
+		// on its own (pipe fully closed, no descendants holding it),
+		// cs.done fires first and we skip the force-close entirely
+		select {
+		case <-cs.done:
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+		_ = stdout.Close()
+	}()
+
+	return waitErrCh, waitDone
+}
+
+func (cs *claudeSession) finishReadLoop(waitErrCh <-chan error, stderrBuf interface{ String() string }) {
+	err := <-waitErrCh
+
+	cs.alive.Store(false)
+	if err != nil {
+		stderrMsg := ""
+		if stderrBuf != nil {
+			stderrMsg = strings.TrimSpace(stderrBuf.String())
+		}
+		if stderrMsg != "" {
+			slog.Error("claudeSession: process failed", "error", err, "stderr", stderrMsg)
+			evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
+			select {
+			case cs.events <- evt:
+			case <-cs.ctx.Done():
+				// INVARIANT: readLoop must close cs.events and cs.done exactly once
+				// on every termination path. Callers (engine event loop) rely on
+				// these closures to observe session end.
+			}
+		}
+	}
+	close(cs.events)
+	close(cs.done)
+}
+
+func (cs *claudeSession) handleReadLoopScanErr(err error, waitDone <-chan struct{}) {
+	if err == nil {
+		return
+	}
+
+	select {
+	case <-cs.ctx.Done():
+		return
+	case <-waitDone:
+		return
+	default:
+	}
+
+	slog.Error("claudeSession: scanner error", "error", err)
+	evt := core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
+	select {
+	case cs.events <- evt:
+	case <-cs.ctx.Done():
+		return
+	}
+}
+
+func (cs *claudeSession) handleReadLoopLine(line string) {
+	if line == "" {
+		return
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		slog.Debug("claudeSession: non-JSON line", "line", line)
+		if isClaudeDiagnostic(line) {
+			cs.emitStatus(cleanClaudeDiagnostic(line))
+		}
+		return
+	}
+
+	eventType, _ := raw["type"].(string)
+	slog.Debug("claudeSession: event", "type", eventType)
+
+	switch eventType {
+	case "system":
+		cs.handleSystem(raw)
+	case "assistant":
+		cs.handleAssistant(raw)
+	case "user":
+		cs.handleUser(raw)
+	case "result":
+		cs.handleResult(raw)
+	case "control_request":
+		cs.handleControlRequest(raw)
+	case "control_cancel_request":
+		requestID, _ := raw["request_id"].(string)
+		slog.Debug("claudeSession: permission cancelled", "request_id", requestID)
+	default:
+		// Unknown event types are not silently dropped — they are logged
+		// at debug level with the full payload so future diagnosis of
+		// new Claude Code event shapes (e.g. compaction, hook events)
+		// is possible from the log stream. Compaction events are
+		// recognized in handleResult via their `result` subtype rather
+		// than the top-level event type.
+		slog.Debug("claudeSession: unrecognized event type", "type", eventType, "raw", raw)
+	}
+}
+
+// isCompactionResult reports whether a `type:"result"` event is actually
+// a mid-turn compaction notification. Claude Code uses the value
+// `compact` in newer CLI versions and `compaction` in older ones; we
+// accept both to be safe across CLI rollouts (issue #481).
+func isCompactionResult(raw map[string]any) bool {
+	return resultSubtype(raw) == "compact" || resultSubtype(raw) == "compaction"
+}
+
+// resultSubtype extracts the optional `subtype` field from a result
+// event payload. Empty string when missing.
+func resultSubtype(raw map[string]any) string {
+	if s, ok := raw["subtype"].(string); ok {
+		return s
+	}
+	return ""
+}
+
+func (cs *claudeSession) handleSystem(raw map[string]any) {
+	if status := claudeSystemDiagnostic(raw); status != "" {
+		cs.emitStatus(status)
+	}
+	if model, ok := raw["model"].(string); ok && model != "" {
+		cs.activeModel.Store(model)
+	}
+	if sid, ok := raw["session_id"].(string); ok && sid != "" {
+		cs.sessionID.Store(sid)
+		evt := core.Event{Type: core.EventText, SessionID: sid}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+	}
+}
+
+// parseClaudeUsage extracts the four token counts Claude reports per API call.
+// Missing fields default to zero.
+func parseClaudeUsage(usage map[string]any) (input, output, cacheCreation, cacheRead int) {
+	if v, ok := usage["input_tokens"].(float64); ok {
+		input = int(v)
+	}
+	if v, ok := usage["output_tokens"].(float64); ok {
+		output = int(v)
+	}
+	if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		cacheCreation = int(v)
+	}
+	if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+		cacheRead = int(v)
+	}
+	return
+}
+
+func (cs *claudeSession) handleAssistant(raw map[string]any) {
+	msg, ok := raw["message"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	// Capture per-sub-call input/cache values to drive the reply footer's
+	// "ctx N%". Each tool-using turn produces several API sub-calls (one
+	// per model turn between tool calls); the result event aggregates
+	// usage across all of them, which sums cache_read_input_tokens — a
+	// value that legitimately exceeds the context window once tool calls
+	// recycle the same cached prefix many times. Using the LAST assistant
+	// event's usage instead gives us the prompt size of the final
+	// inference call, which is what "context used right now" actually
+	// means.
+	//
+	// Note: `output_tokens` on stream-json assistant events is a placeholder
+	// (typically 1), not the real per-call output. The accurate
+	// turn-total output count only appears on the result event, so we
+	// preserve any prior OutputTokens here and let handleResult populate
+	// the final value.
+	if usageRaw, ok := msg["usage"].(map[string]any); ok {
+		input, _, cc, cr := parseClaudeUsage(usageRaw)
+		used := input + cc + cr
+		if used > 0 {
+			model := cs.GetModel()
+			window := claudeContextWindow(model)
+			cs.usageMu.Lock()
+			prevOutput := 0
+			if cs.lastUsage != nil {
+				prevOutput = cs.lastUsage.OutputTokens
+			}
+			cs.lastUsage = &core.ContextUsage{
+				UsedTokens:               used,
+				TotalTokens:              used + prevOutput,
+				InputTokens:              input,
+				CachedInputTokens:        cr,
+				CacheCreationInputTokens: cc,
+				OutputTokens:             prevOutput,
+				ContextWindow:            window,
+			}
+			cs.usageMu.Unlock()
+		}
+	}
+
+	contentArr, ok := msg["content"].([]any)
+	if !ok {
+		return
+	}
+	for _, contentItem := range contentArr {
+		item, ok := contentItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		contentType, _ := item["type"].(string)
+		switch contentType {
+		case "tool_use":
+			toolName, _ := item["name"].(string)
+			if toolName == "AskUserQuestion" {
+				continue
+			}
+			inputSummary := summarizeInput(toolName, item["input"])
+			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: inputSummary}
+			select {
+			case cs.events <- evt:
+			case <-cs.ctx.Done():
+				return
+			}
+		case "thinking":
+			if thinking, ok := item["thinking"].(string); ok && thinking != "" {
+				evt := core.Event{Type: core.EventThinking, Content: thinking}
+				select {
+				case cs.events <- evt:
+				case <-cs.ctx.Done():
+					return
+				}
+			}
+		case "text":
+			if text, ok := item["text"].(string); ok && text != "" {
+				evt := core.Event{Type: core.EventText, Content: text}
+				if raw["error"] != nil || raw["isApiErrorMessage"] == true {
+					evt.Type = core.EventStatus
+				}
+				select {
+				case cs.events <- evt:
+				case <-cs.ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+func (cs *claudeSession) handleUser(raw map[string]any) {
+	msg, ok := raw["message"].(map[string]any)
+	if !ok {
+		return
+	}
+	contentArr, ok := msg["content"].([]any)
+	if !ok {
+		return
+	}
+	for _, contentItem := range contentArr {
+		item, ok := contentItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		contentType, _ := item["type"].(string)
+		if contentType == "tool_result" {
+			isError, _ := item["is_error"].(bool)
+			var result string
+			switch c := item["content"].(type) {
+			case string:
+				result = c
+			case []any:
+				var parts []string
+				for _, elem := range c {
+					if m, ok := elem.(map[string]any); ok {
+						if t, _ := m["text"].(string); t != "" {
+							parts = append(parts, t)
+						}
+					}
+				}
+				result = strings.Join(parts, "\n")
+			}
+			if isError {
+				slog.Debug("claudeSession: tool error", "content", result)
+			}
+			success := !isError
+			code := 0
+			if isError {
+				code = 1
+			}
+			evt := core.Event{
+				Type:         core.EventToolResult,
+				ToolResult:   truncateStr(strings.TrimSpace(result), 500),
+				ToolExitCode: &code,
+				ToolSuccess:  &success,
+			}
+			select {
+			case cs.events <- evt:
+			case <-cs.ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (cs *claudeSession) handleResult(raw map[string]any) {
+	var content string
+	if result, ok := raw["result"].(string); ok {
+		content = result
+	}
+	if sid, ok := raw["session_id"].(string); ok && sid != "" {
+		cs.sessionID.Store(sid)
+	}
+
+	// Compaction events arrive as `type:"result"` with `subtype:"compact"`
+	// or `subtype:"compaction"`. They are NOT turn completion — the CLI
+	// is mid-task and will continue streaming subsequent tool calls and
+	// assistant messages after the compaction step. Treating these as
+	// Done=true would make the engine's processInteractiveEvents return
+	// early and drop the rest of the turn (issue #481).
+	isCompaction := isCompactionResult(raw)
+	if isCompaction {
+		slog.Info("claudeSession: mid-turn compaction event; continuing turn", "subtype", resultSubtype(raw))
+	}
+
+	// Aggregated usage across all sub-calls in this turn — used for billing-
+	// style reporting in the EventResult event (slog turn-complete log etc.).
+	// We do NOT pull input/cache values into cs.lastUsage from here:
+	// cache_read_input_tokens is summed across every sub-call that hit the
+	// cached prefix, so on long agentic turns it vastly exceeds the model
+	// context window. The per-sub-call usage captured in handleAssistant
+	// gives a faithful "context used right now" snapshot.
+	//
+	// We DO use the result's output_tokens to update lastUsage.OutputTokens
+	// because output is additive (each sub-call's tokens are real new
+	// tokens, never recycled) and the per-assistant-event output_tokens in
+	// stream-json is a placeholder (typically 1). The result is the only
+	// authoritative source of total tokens generated for this turn.
+	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int
+	if usage, ok := raw["usage"].(map[string]any); ok {
+		inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens = parseClaudeUsage(usage)
+	}
+	if outputTokens > 0 {
+		cs.usageMu.Lock()
+		if cs.lastUsage != nil {
+			cs.lastUsage.OutputTokens = outputTokens
+			cs.lastUsage.TotalTokens = cs.lastUsage.UsedTokens + outputTokens
+		}
+		cs.usageMu.Unlock()
+	}
+
+	evt := core.Event{
+		Type:                     core.EventResult,
+		Content:                  content,
+		SessionID:                cs.CurrentSessionID(),
+		Done:                     !isCompaction,
+		InputTokens:              inputTokens,
+		OutputTokens:             outputTokens,
+		CacheCreationInputTokens: cacheCreationTokens,
+		CacheReadInputTokens:     cacheReadTokens,
+	}
+	isError, _ := raw["is_error"].(bool)
+	if evt.Done && (isError || strings.HasPrefix(resultSubtype(raw), "error")) {
+		var details []string
+		if strings.TrimSpace(content) != "" {
+			details = append(details, content)
+		}
+		if errors, ok := raw["errors"].([]any); ok {
+			for _, item := range errors {
+				if message, ok := item.(string); ok && strings.TrimSpace(message) != "" {
+					details = append(details, message)
+				}
+			}
+		}
+		if len(details) == 0 {
+			details = append(details, "Claude Code turn failed: "+resultSubtype(raw))
+		}
+		evt.Type = core.EventError
+		evt.Error = fmt.Errorf("%s", strings.Join(details, "\n"))
+	}
+	if evt.Done {
+		cs.signalTurnDone()
+	}
+	select {
+	case cs.events <- evt:
+	case <-cs.ctx.Done():
+		return
+	}
+}
+
+// signalTurnDone closes and clears the current turnDoneCh (if armed),
+// waking any CancelTurn call blocked on it. Safe to call even if no turn
+// was armed.
+func (cs *claudeSession) signalTurnDone() {
+	cs.turnDoneMu.Lock()
+	if cs.turnDoneCh != nil {
+		close(cs.turnDoneCh)
+		cs.turnDoneCh = nil
+	}
+	cs.turnDoneMu.Unlock()
+}
+
+func (cs *claudeSession) handleControlRequest(raw map[string]any) {
+	requestID, _ := raw["request_id"].(string)
+	request, _ := raw["request"].(map[string]any)
+	if request == nil {
+		return
+	}
+	subtype, _ := request["subtype"].(string)
+	if subtype != "can_use_tool" {
+		slog.Debug("claudeSession: unknown control request subtype", "subtype", subtype)
+		return
+	}
+
+	toolName, _ := request["tool_name"].(string)
+	input, _ := request["input"].(map[string]any)
+
+	// AskUserQuestion and ExitPlanMode need a human answer rather than a
+	// permission decision: auto-approving them hands Claude an empty answer
+	// set or silently accepts an unseen plan. Always forward them.
+	interactive := isInteractiveTool(toolName)
+
+	if cs.autoApprove.Load() && !interactive {
+		slog.Debug("claudeSession: auto-approving", "request_id", requestID, "tool", toolName)
+		_ = cs.RespondPermission(requestID, core.PermissionResult{
+			Behavior:     "allow",
+			UpdatedInput: input,
+		})
+		return
+	}
+	if cs.dontAsk.Load() && !interactive {
+		slog.Debug("claudeSession: auto-denying", "request_id", requestID, "tool", toolName)
+		_ = cs.RespondPermission(requestID, core.PermissionResult{
+			Behavior: "deny",
+			Message:  "Permission mode is set to dontAsk.",
+		})
+		return
+	}
+	if cs.acceptEditsOnly.Load() && isClaudeEditTool(toolName) {
+		slog.Debug("claudeSession: auto-approving edit tool", "request_id", requestID, "tool", toolName)
+		_ = cs.RespondPermission(requestID, core.PermissionResult{
+			Behavior:     "allow",
+			UpdatedInput: input,
+		})
+		return
+	}
+
+	// Check Claude Code's PermissionRequest hooks before forwarding to platform.
+	hctx := hookContext{
+		sessionID:      cs.CurrentSessionID(),
+		toolName:       toolName,
+		toolInput:      input,
+		cwd:            cs.workDir,
+		permissionMode: cs.permissionModeValue(),
+		transcriptPath: cs.transcriptPath(),
+	}
+	if toolName == "AskUserQuestion" {
+		// Hooks cannot supply answers; skip straight to the user.
+	} else if decision, ok := cs.ccHooks.tryHook(cs.ctx, hctx); ok {
+		slog.Info("claudeSession: hook decided",
+			"request_id", requestID, "tool", toolName, "behavior", decision.Behavior)
+		result := core.PermissionResult{
+			Behavior:     decision.Behavior,
+			UpdatedInput: input,
+		}
+		if decision.Behavior == "deny" && decision.Message != "" {
+			result.Message = decision.Message
+		}
+		_ = cs.RespondPermission(requestID, result)
+		return
+	}
+
+	slog.Info("claudeSession: permission request", "request_id", requestID, "tool", toolName)
+	evt := core.Event{
+		Type:         core.EventPermissionRequest,
+		RequestID:    requestID,
+		ToolName:     toolName,
+		ToolInput:    summarizeInput(toolName, input),
+		ToolInputRaw: input,
+	}
+
+	switch toolName {
+	case "AskUserQuestion":
+		evt.Questions = parseUserQuestions(input)
+	case "ExitPlanMode":
+		if plan, _ := input["plan"].(string); strings.TrimSpace(plan) != "" {
+			evt.ToolInput = plan
+		}
+	}
+
+	select {
+	case cs.events <- evt:
+	case <-cs.ctx.Done():
+		return
+	}
+}
+
+// Send writes a user message (with optional images and files) to the Claude process stdin.
+// Images are sent as base64 in the multimodal content array.
+// Files are saved to local temp files and referenced in the text prompt
+// so Claude Code can read them with its built-in tools.
+func (cs *claudeSession) Send(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	if !cs.alive.Load() {
+		return fmt.Errorf("session process is not running")
+	}
+
+	cs.turnDoneMu.Lock()
+	cs.turnDoneCh = make(chan struct{})
+	cs.turnDoneMu.Unlock()
+	return cs.sendUserMessage(prompt, messageID, images, files)
+}
+
+// Steer writes another user message to Claude's bidirectional stream-json
+// input while a turn is running. Claude consumes it as in-turn user input;
+// unlike Send, it must not arm a new turn completion channel.
+func (cs *claudeSession) Steer(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	if !cs.alive.Load() {
+		return fmt.Errorf("session process is not running")
+	}
+	return cs.sendUserMessage(prompt, messageID, images, files)
+}
+
+func (cs *claudeSession) sendUserMessage(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	if len(images) == 0 && len(files) == 0 {
+		return cs.writeJSON(map[string]any{
+			"type":    "user",
+			"message": map[string]any{"role": "user", "content": prompt},
+		})
+	}
+
+	attachDir := filepath.Join(cs.workDir, ".agent-bridge", "attachments")
+	if err := os.MkdirAll(attachDir, 0o755); err != nil {
+		slog.Warn("claudeSession: mkdir attachments failed", "error", err, "path", attachDir)
+	}
+
+	var parts []map[string]any
+	var savedPaths []string
+
+	// Save and encode images
+	for i, img := range images {
+		ext := core.ExtFromMime(img.MimeType)
+		fname := fmt.Sprintf("img_%d_%d%s", time.Now().UnixMilli(), i, ext)
+		fpath := filepath.Join(attachDir, fname)
+		if err := os.WriteFile(fpath, img.Data, 0o644); err != nil {
+			slog.Error("claudeSession: save image failed", "error", err)
+			continue
+		}
+		savedPaths = append(savedPaths, fpath)
+		slog.Debug("claudeSession: image saved", "path", fpath, "size", len(img.Data))
+
+		mimeType := img.MimeType
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		parts = append(parts, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": mimeType,
+				"data":       base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+
+	// Save files to disk so Claude Code can read them
+	filePaths := core.SaveFilesToDisk(cs.workDir, messageID, files)
+
+	// Build text part: user prompt + short file/image path references.
+	textPart := prompt
+	if len(savedPaths) > 0 {
+		textPart = core.AppendImageRefs(textPart, savedPaths)
+	}
+	if len(filePaths) > 0 {
+		textPart = core.AppendFileRefs(textPart, filePaths)
+	}
+	parts = append(parts, map[string]any{"type": "text", "text": textPart})
+
+	return cs.writeJSON(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": parts},
+	})
+}
+
+// RespondPermission writes a control_response to the Claude process stdin.
+func (cs *claudeSession) RespondPermission(requestID string, result core.PermissionResult) error {
+	if !cs.alive.Load() {
+		return fmt.Errorf("session process is not running")
+	}
+
+	var permResponse map[string]any
+	if result.Behavior == "allow" {
+		updatedInput := result.UpdatedInput
+		if updatedInput == nil {
+			updatedInput = make(map[string]any)
+		}
+		permResponse = map[string]any{
+			"behavior":     "allow",
+			"updatedInput": updatedInput,
+		}
+	} else {
+		msg := result.Message
+		if msg == "" {
+			msg = "The user denied this tool use. Stop and wait for the user's instructions."
+		}
+		permResponse = map[string]any{
+			"behavior": "deny",
+			"message":  msg,
+		}
+	}
+
+	controlResponse := map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": requestID,
+			"response":   permResponse,
+		},
+	}
+
+	if result.Behavior == "allow" && len(result.UpdatedPermissions) > 0 {
+		permResponse["updatedPermissions"] = result.UpdatedPermissions
+	}
+
+	slog.Debug("claudeSession: permission response", "request_id", requestID, "behavior", result.Behavior)
+	if err := cs.writeJSON(controlResponse); err != nil {
+		return err
+	}
+	// Mirror a CLI-side mode switch (e.g. leaving plan mode after the user
+	// approves a plan) so auto-approval flags stay in sync with Claude.
+	if result.Behavior == "allow" {
+		for _, u := range result.UpdatedPermissions {
+			if t, _ := u["type"].(string); t == "setMode" {
+				if mode, _ := u["mode"].(string); mode != "" {
+					cs.setPermissionMode(mode)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// CancelTurn sends Claude Code's non-destructive stream-json interrupt
+// control_request and waits for the interrupted turn's own EventResult to
+// land (observed via turnDoneCh, without consuming from the events channel
+// that the engine's processInteractiveEvents loop owns during a live turn).
+// A successful return means the interrupted turn has already flowed through
+// the normal completion pipeline (history, reply delivery, etc.) and the
+// caller can safely start a new turn on this same session immediately.
+func (cs *claudeSession) CancelTurn() error {
+	if !cs.alive.Load() {
+		return fmt.Errorf("claudecode: session process is not running")
+	}
+
+	cs.turnDoneMu.Lock()
+	waitCh := cs.turnDoneCh
+	cs.turnDoneMu.Unlock()
+	if waitCh == nil {
+		// No turn in flight — nothing to cancel.
+		return nil
+	}
+
+	requestID := uuid.NewString()
+	if err := cs.writeJSON(map[string]any{
+		"type":       "control_request",
+		"request_id": requestID,
+		"request":    map[string]any{"subtype": "interrupt"},
+	}); err != nil {
+		return fmt.Errorf("claudecode: write interrupt: %w", err)
+	}
+	slog.Info("claudeSession: sent interrupt control_request", "request_id", requestID)
+
+	select {
+	case <-waitCh:
+		slog.Info("claudeSession: interrupted turn completed", "request_id", requestID)
+		return nil
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("claudecode: interrupt timed out waiting for turn completion")
+	case <-cs.ctx.Done():
+		return cs.ctx.Err()
+	}
+}
+
+func (cs *claudeSession) writeJSON(v any) error {
+	cs.stdinMu.Lock()
+	defer cs.stdinMu.Unlock()
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if _, err := cs.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write stdin: %w", err)
+	}
+	return nil
+}
+
+// isInteractiveTool reports whether a tool's permission request is really a
+// question for the user (answers or plan approval) rather than a yes/no gate.
+func isInteractiveTool(toolName string) bool {
+	return toolName == "AskUserQuestion" || toolName == "ExitPlanMode"
+}
+
+func isClaudeEditTool(toolName string) bool {
+	switch toolName {
+	case "Edit", "Write", "NotebookEdit", "MultiEdit":
+		return true
+	default:
+		return false
+	}
+}
+
+func (cs *claudeSession) setPermissionMode(mode string) {
+	cs.permissionMode.Store(mode)
+	cs.autoApprove.Store(mode == "bypassPermissions")
+	cs.acceptEditsOnly.Store(mode == "acceptEdits")
+	cs.dontAsk.Store(mode == "dontAsk")
+}
+
+func (cs *claudeSession) SetLiveMode(mode string) bool {
+	current, _ := cs.permissionMode.Load().(string)
+	if mode == "auto" || mode == "plan" || current == "auto" || current == "plan" {
+		return false
+	}
+	cs.setPermissionMode(mode)
+	return true
+}
+
+func (cs *claudeSession) Events() <-chan core.Event {
+	return cs.events
+}
+
+func (cs *claudeSession) CurrentSessionID() string {
+	v, _ := cs.sessionID.Load().(string)
+	return v
+}
+
+func (cs *claudeSession) permissionModeValue() string {
+	v, _ := cs.permissionMode.Load().(string)
+	return v
+}
+
+// transcriptPath returns the path to the Claude Code JSONL transcript
+// for the current session, or "" if it cannot be determined.
+func (cs *claudeSession) transcriptPath() string {
+	sessionID := cs.CurrentSessionID()
+	if sessionID == "" || cs.workDir == "" {
+		return ""
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	absWorkDir, err := filepath.Abs(cs.workDir)
+	if err != nil {
+		return ""
+	}
+	projectDir := findProjectDir(homeDir, absWorkDir)
+	if projectDir == "" {
+		return ""
+	}
+	return filepath.Join(projectDir, sessionID+".jsonl")
+}
+
+// GetModel returns the model id reported by the CLI's init event (e.g.
+// "claude-opus-4-7[1m]"). Returns "" until the init event has been seen.
+func (cs *claudeSession) GetModel() string {
+	if v, ok := cs.activeModel.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// GetWorkDir returns the working directory this session was started in.
+func (cs *claudeSession) GetWorkDir() string {
+	return cs.workDir
+}
+
+// GetContextUsage returns a snapshot of the most recent per-turn context
+// usage, or nil if no result event has been observed yet.
+func (cs *claudeSession) GetContextUsage() *core.ContextUsage {
+	cs.usageMu.Lock()
+	defer cs.usageMu.Unlock()
+	if cs.lastUsage == nil {
+		return nil
+	}
+	clone := *cs.lastUsage
+	return &clone
+}
+
+func (cs *claudeSession) Alive() bool {
+	return cs.alive.Load()
+}
+
+// defaultGracefulStopTimeout 是 Close() Phase 1「关掉 stdin、等它自己干净退出」
+// 的等待上限。
+//
+// 🔴 2026-07-31 从 120s 降到 5s（Cheney 实测逼出来的）。
+//
+// 症状：按 /stop，飞书**立刻**回「执行已停止」，但 bot **还在继续干活、继续说话**，
+// 连按好几次都一样。实测时间线：
+//
+//	17:45:20 /stop → 17:47:20 graceful 超时才发 SIGTERM → 17:47:29 真死，**用时 2 分 09 秒**。
+//
+// 那 2 分钟里它照常写库、照常推消息 —— 而用户按 /stop 的原因恰恰是**它正在做错的事**。
+//
+// 为什么原来是 120s：注释写着「to match claude-mem's Stop hook timeout」——
+// 留时间给 Stop 钩子（如 claude-mem 的会话摘要）跑完。
+// 🔴 但这台机器上**根本没有任何 Stop hook**（全局 settings 只有 PreToolUse + SessionStart，
+// 五个 bot 项目也都没有，claude-mem 未安装）。**那 120 秒在等一个不存在的东西。**
+//
+// 为什么 graceful 对"正在干活"根本不管用：Claude Code 只有在**当前这一轮跑完**之后
+// 才会理会 stdin EOF。它要是正卡在一个长工具调用里，等多久都没用 —— 等的不是"它快好了"，
+// 是"这一轮什么时候结束"。所以对 /stop 这个语义（**现在就停**），graceful 窗口只该覆盖
+// 「它本来就闲着」这一种情况，剩下的一律交给 SIGTERM/SIGKILL。
+//
+// 5s 的取舍：闲置会话关 stdin 后 1s 内就退，5s 是宽裕的余量；真在跑的会话则
+// 5s + 5s(SIGTERM) ≈ **10 秒内**被强杀，用户体感是"按了就停"。
+//
+// ⚠️ **哪天真装了 Stop hook（claude-mem 之类），必须回来重新评估这个值** ——
+// 5s 会把钩子切掉，而且是无声的。届时正确做法是按"用户主动 /stop"和"系统内部回收"
+// 分成两个窗口，而不是把这个数字调回 120s。
+const defaultGracefulStopTimeout = 5 * time.Second
+
+func (cs *claudeSession) Close() error {
+	// Best-effort cleanup of the --append-system-prompt-file temp file on
+	// every exit path. The file is small (~9KB) and OS temp cleanup also
+	// eventually claims it, but explicit removal keeps workdirs tidy.
+	defer func() {
+		if cs.promptFilePath != "" {
+			_ = os.Remove(cs.promptFilePath)
+		}
+	}()
+
+	// Phase 1: Close stdin to signal EOF. Claude Code exits cleanly on
+	// stdin close, running Stop hooks (e.g. claude-mem session summary).
+	cs.stdinMu.Lock()
+	if err := cs.stdin.Close(); err != nil {
+		slog.Warn("claudeSession: close stdin", "error", err)
+	}
+	cs.stdinMu.Unlock()
+
+	graceful := cs.gracefulStopTimeout
+	if graceful <= 0 {
+		graceful = 8 * time.Second // legacy fallback
+	}
+
+	select {
+	case <-cs.done:
+		slog.Info("claudeSession: exited cleanly after stdin close")
+		return nil
+	case <-time.After(graceful):
+		slog.Warn("claudeSession: graceful stop timed out, sending SIGTERM",
+			"timeout", graceful)
+	}
+
+	// Phase 2: SIGTERM the whole process group — gives the process and its
+	// descendants (e.g. MCP server bridges) a second chance to run cleanup
+	// handlers that respond to signals but not stdin EOF.
+	if err := signalProcessGroup(cs.cmd, syscall.SIGTERM); err != nil {
+		slog.Warn("claudeSession: signal SIGTERM", "error", err)
+	}
+
+	select {
+	case <-cs.done:
+		slog.Info("claudeSession: exited after SIGTERM")
+		return nil
+	case <-time.After(5 * time.Second):
+		slog.Warn("claudeSession: SIGTERM timed out, sending SIGKILL")
+	}
+
+	// Phase 3: SIGKILL the whole process group — last resort. Using a
+	// group-wide kill ensures grandchildren (Claude Code's MCP servers
+	// such as the Telegram bridge) are reaped along with the direct child;
+	// otherwise they can survive as orphans and spin at 100% CPU.
+	//
+	// A single taskkill /T /F attempt can lose a race against a
+	// still-forking descendant tree (e.g. an MCP server process spawned
+	// moments earlier) and report a PID as "could not be terminated" even
+	// though a repeat attempt kills it cleanly. Retry a few times before
+	// giving up, and bound the final wait so a kill that silently failed
+	// to take effect cannot hang this goroutine — and by extension the
+	// caller's abandon-timeout — forever.
+	cs.cancel()
+	const killAttempts = 3
+	var killErr error
+	for attempt := 1; attempt <= killAttempts; attempt++ {
+		if killErr = forceKillCmd(cs.cmd); killErr == nil {
+			break
+		}
+		slog.Warn("claudeSession: force kill attempt failed",
+			"attempt", attempt, "max_attempts", killAttempts, "error", killErr)
+		select {
+		case <-cs.done:
+			slog.Info("claudeSession: exited during force-kill retries")
+			return nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	select {
+	case <-cs.done:
+		return nil
+	case <-time.After(10 * time.Second):
+		pid := -1
+		if cs.cmd != nil && cs.cmd.Process != nil {
+			pid = cs.cmd.Process.Pid
+		}
+		if killErr != nil {
+			return fmt.Errorf("process tree (pid %d) still alive after SIGKILL retries: %w", pid, killErr)
+		}
+		return fmt.Errorf("process tree (pid %d) still alive 10s after SIGKILL reported success", pid)
+	}
+}
+
+// shellJoinArgs joins args into a single string, quoting any arg that
+// contains whitespace so that a shell-style splitter (like my_cli's
+// splitCommandLine) preserves each arg as one token.
+//
+// Uses single quotes because some splitters (e.g. my_cli) don't support
+// backslash escapes inside double quotes. For values containing single
+// quotes, we close the single-quoted segment, add an escaped single
+// quote, and reopen: 'it'\”s' → it's
+func shellJoinArgs(args []string) string {
+	var b strings.Builder
+	for i, a := range args {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		if !strings.ContainsAny(a, " \t\n\r'\"\\") {
+			b.WriteString(a)
+			continue
+		}
+		b.WriteByte('\'')
+		for _, c := range a {
+			if c == '\'' {
+				b.WriteString("'\\''")
+			} else {
+				b.WriteRune(c)
+			}
+		}
+		b.WriteByte('\'')
+	}
+	return b.String()
+}
+
+// claudeContextWindow returns the context window size (tokens) that best
+// matches the given Claude model id. Used as a fallback when the stream-json
+// result event does not carry a modelUsage map. The "[1m]" suffix
+// (case-insensitive) signals the 1M-context variants; everything else
+// defaults to the standard 200k window.
+func claudeContextWindow(model string) int {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if lower == "" {
+		return 200_000
+	}
+	if strings.Contains(lower, "[1m]") {
+		return 1_000_000
+	}
+	return 200_000
+}
+
+// filterEnv returns a copy of env with entries matching the given key removed.
+func filterEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}

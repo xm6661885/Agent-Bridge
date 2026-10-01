@@ -1,0 +1,78 @@
+# agent-bridge configuration
+# Copy to ~/.agent-bridge/config.toml and replace the placeholder values.
+# Only Claude Code and Codex agents are built in.
+# Only Weixin, Feishu, Telegram and QQ channels are built in.
+# QQ offers OneBot/NapCat (qq) and Official Bot (qqbot).
+# Secrets can be read from environment variables with ${VAR_NAME}.
+
+# Global progress settings; project [projects.display] overrides each field.
+[display]
+cleanup_progress_on_complete = false # delete thinking/tools and recovered diagnostics on supported channels
+collapse_tool_messages = false # current activity only; no tool inputs/results
+
+[log]
+level = "info"
+
+# Optional: default is ~/.agent-bridge. Change absolute old paths manually.
+# data_dir = "/home/user/.agent-bridge"
+
+# Optional: external schedulers may call the webhook or `agent-bridge send`.
+# [webhook]
+# enabled = true
+# listen = "127.0.0.1:8080"
+
+[[projects]]
+name = "my-project"
+
+# Optional per-project overrides (omit to inherit globals):
+# [projects.display]
+# cleanup_progress_on_complete = true
+# collapse_tool_messages = true
+
+[projects.agent]
+type = "claudecode" # "claudecode" | "codex"
+
+[projects.agent.options]
+work_dir = "/path/to/project"
+mode = "default"
+# agent-bridge injects no prompts; put project instructions in CLAUDE.md.
+# system_prompt = "Your own project instructions"
+# append_system_prompt = "Additional instructions"
+
+[[projects.platforms]]
+type = "feishu" # "feishu" | "weixin" | "telegram" | "qq" | "qqbot"
+
+[projects.platforms.options]
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+
+# Weixin personal account (ilink): run `agent-bridge weixin setup` for QR login.
+# 微信个人号：使用 `agent-bridge weixin setup` 扫码登录。
+# [[projects.platforms]]
+# type = "weixin"
+# [projects.platforms.options]
+# token = "${WEIXIN_BOT_TOKEN}"
+
+# Telegram bot:
+# [[projects.platforms]]
+# type = "telegram"
+# [projects.platforms.options]
+# token = "${TELEGRAM_BOT_TOKEN}"
+# allow_from = "*"
+
+# QQ OneBot v11 / NapCat:
+# [[projects.platforms]]
+# type = "qq"
+# [projects.platforms.options]
+# ws_url = "ws://127.0.0.1:3001"
+# token = "${QQ_ONEBOT_TOKEN}"
+# allow_from = "*"
+# allow_groups = "*" # group whitelist, e.g. "111111,222222"; other groups are ignored
+
+# QQ Official Bot:
+# [[projects.platforms]]
+# type = "qqbot"
+# [projects.platforms.options]
+# app_id = "${QQ_BOT_APP_ID}"
+# app_secret = "${QQ_BOT_APP_SECRET}"
+# allow_from = "*"
