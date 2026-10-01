@@ -29,6 +29,7 @@ Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to 
 - `/reasoning` renamed to `/effort`; changing effort resumes the existing conversation.
 - Polished user-facing messages and removed emoji.
 - QQ: group whitelist (`allow_groups`) and reply-only-when-@mentioned in groups.
+- Various other bug fixes.
 - Removed built-in cron, timers, and agent heartbeat. Use an external scheduler that calls the webhook or `agent-bridge send`.
 - Removed multi-bot relay, `/bind`, and `relay send`.
 - No prompt injection of any kind. Put project instructions in `CLAUDE.md` / `AGENTS.md`. Claude Code only receives the `system_prompt` / `append_system_prompt` you configure explicitly.

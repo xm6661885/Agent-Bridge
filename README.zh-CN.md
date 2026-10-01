@@ -29,6 +29,7 @@ Agent-Bridge 把本地 AI 编程 Agent（**Claude Code**、**Codex**）连接到
 - `/reasoning` 改为 `/effort`，调整后续接原会话。
 - 优化提示文案，去除 emoji。
 - QQ 支持群聊白名单（`allow_groups`）和群内仅被 @ 时回复。
+- 其他若干 bug 修复。
 - 删除内置 cron、timer、Agent heartbeat；定时任务请用外部调度器调用 webhook 或 `agent-bridge send`。
 - 删除多机器人中继、`/bind` 与 `relay send`。
 - 不注入任何提示词，项目说明写在 `CLAUDE.md` / `AGENTS.md`。Claude Code 只透传你显式配置的 `system_prompt` / `append_system_prompt`。
