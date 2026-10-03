@@ -72,36 +72,6 @@ func (p *previewCapturePlatform) UpdateMessage(_ context.Context, _ any, content
 	return nil
 }
 
-func TestBuildAndParseProgressCardPayload(t *testing.T) {
-	payload := BuildProgressCardPayload([]string{" step1 ", "", "step2"}, true)
-	if payload == "" {
-		t.Fatal("BuildProgressCardPayload returned empty string")
-	}
-	if !strings.HasPrefix(payload, ProgressCardPayloadPrefix) {
-		t.Fatalf("payload = %q, want prefix %q", payload, ProgressCardPayloadPrefix)
-	}
-
-	parsed, ok := ParseProgressCardPayload(payload)
-	if !ok {
-		t.Fatalf("ParseProgressCardPayload should succeed, payload=%q", payload)
-	}
-	if len(parsed.Entries) != 2 {
-		t.Fatalf("entries = %d, want 2", len(parsed.Entries))
-	}
-	if parsed.Entries[0] != "step1" || parsed.Entries[1] != "step2" {
-		t.Fatalf("entries = %#v, want [step1 step2]", parsed.Entries)
-	}
-	if !parsed.Truncated {
-		t.Fatal("parsed.Truncated = false, want true")
-	}
-	if len(parsed.Items) != 2 {
-		t.Fatalf("items = %d, want 2", len(parsed.Items))
-	}
-	if parsed.Items[0].Kind != ProgressEntryInfo || parsed.Items[0].Text != "step1" {
-		t.Fatalf("items[0] = %#v, want info/step1", parsed.Items[0])
-	}
-}
-
 func TestCompactProgressWriter_UsesReplyContextHints(t *testing.T) {
 	p := &previewCapturePlatform{}
 	replyCtx := progressHintReplyCtx{

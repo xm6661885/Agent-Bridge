@@ -18,7 +18,7 @@ Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to 
 - **Providers**: manage API providers per project (CLI, chat, or Web Admin).
 - **Web Admin**: built-in management UI with real-time chat over WebSocket.
 - **Daemon mode**: install as a systemd / launchd / Windows scheduled-task service.
-- **External automation**: trigger messages through the webhook or `agent-bridge send`.
+- **External automation**: trigger agent turns through the webhook; deliver files and media with `agent-bridge send`.
 - **No prompt injection**: Agent-Bridge never injects bridge or platform prompts into agent sessions.
 
 ## Differences from cc-connect
@@ -30,8 +30,10 @@ Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to 
 - Polished user-facing messages and removed emoji.
 - QQ: group whitelist (`allow_groups`) and reply-only-when-@mentioned in groups.
 - Various other bug fixes.
-- Removed built-in cron, timers, and agent heartbeat. Use an external scheduler that calls the webhook or `agent-bridge send`.
+- Removed built-in cron, timers, and agent heartbeat. Use an external scheduler that calls the webhook.
 - Removed multi-bot relay, `/bind`, and `relay send`.
+- Removed multi-workspace mode (`/workspace`) and OS-user isolation (`run_as_user`, `doctor user-isolation`).
+- `agent-bridge send` only delivers attachments and TTS voice; `-m` is a caption that must accompany `--image`/`--file`.
 - No prompt injection of any kind. Put project instructions in `CLAUDE.md` / `AGENTS.md`. Claude Code only receives the `system_prompt` / `append_system_prompt` you configure explicitly.
 - English-only UI and messages. Removed language settings, auto detection, and `/lang`.
 - Removed update checks and `/upgrade`, plus `/status`, `/usage`, `/version`, `/config`, `/memory`, `/doctor`, `/web`, and `/ps` (`/btw`).
@@ -131,7 +133,6 @@ See [config.example.toml](config.example.toml) for every platform.
 | `/provider` | Show or switch provider |
 | `/quiet` | Toggle progress messages |
 | `/dir` (`/cd`) | Change working directory |
-| `/workspace` (`/ws`) | Manage workspaces |
 | `/shell` (`/sh`, `/run`) | Run a shell command |
 | `/diff` | Show working-tree diff |
 | `/show` | Show a file |
@@ -177,7 +178,7 @@ Then open `http://127.0.0.1:9820`. Keep it behind localhost, a VPN, or a reverse
 ```text
 agent-bridge [--config path] [--force]
 agent-bridge daemon install|uninstall|start|stop|restart|status|logs [-f] [-n N]
-agent-bridge send -m "text" | --stdin  [-p project] [-s session]
+agent-bridge send --image|--file|--audio|--video <path> | --tts <text>  [-m caption] [-p project] [-s session]
 agent-bridge sessions list | show <id> [-n N]
 agent-bridge agent-sid
 agent-bridge provider add|list|remove --project <name> ...
@@ -188,13 +189,7 @@ agent-bridge config example|format|path
 
 ## Scheduled tasks
 
-There is no built-in scheduler. Use cron, systemd timers, or similar:
-
-```cron
-0 9 * * * agent-bridge send -p my-project -m "Summarize yesterday's commits"
-```
-
-Or enable `[webhook]` and call it from any external system.
+There is no built-in scheduler. Enable `[webhook]` and call it from cron, systemd timers, or any external system. Use `agent-bridge send --file <path>` to deliver generated files.
 
 ## Project layout
 

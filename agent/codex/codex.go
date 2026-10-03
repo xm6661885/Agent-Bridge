@@ -676,12 +676,12 @@ func (a *Agent) activeProviderCodexConfig() (name string, apiKey string, wireAPI
 func (a *Agent) PermissionModes() []core.PermissionModeInfo {
 	return []core.PermissionModeInfo{
 		{Key: "suggest", Name: "Suggest",
-			Desc:   "Read-only sandbox; on exec backend no prompts, on app_server backend asks for every tool call"},
+			Desc: "Read-only sandbox; on exec backend no prompts, on app_server backend asks for every tool call"},
 		{Key: "auto-edit", Name: "Auto Edit",
-			Desc:   "Workspace-write sandbox, no approval prompts (alias of Full Auto)"},
+			Desc: "Workspace-write sandbox, no approval prompts (alias of Full Auto)"},
 		{Key: "full-auto", Name: "Full Auto",
-			Desc:   "Workspace-write sandbox, no approval prompts"},
+			Desc: "Workspace-write sandbox, no approval prompts"},
 		{Key: "yolo", Name: "YOLO",
-			Desc:   "Bypass all approvals and sandbox (DANGEROUS)"},
+			Desc: "Bypass all approvals and sandbox (DANGEROUS)"},
 	}
 }

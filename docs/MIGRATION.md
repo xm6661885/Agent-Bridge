@@ -9,7 +9,7 @@
 1. 停止旧服务，防止复制期间会话状态继续变化：`systemctl --user stop cc-connect.service`。
 2. 创建 `~/.agent-bridge`，从 `~/.cc-connect` 复制 `config.toml`、`sessions/`、`projects/`、`weixin/` 和 `dir_history.json`。复制时保留权限和时间戳；旧目录不要删除。
 3. 编辑新 `config.toml`：将显式 `data_dir` 和其他指向旧名称的绝对路径改成新路径。保留原项目名称可继续对应旧会话文件。Agent 只能用 `claudecode`、`codex`；消息渠道只能用 `feishu`/`lark`、`weixin`、`telegram`、`qq`、`qqbot`。删除旧配置中其他 Agent 和渠道的项目或平台块。
-4. 删除旧配置中的 `[relay]`、`[projects.heartbeat]`、cron/timer 相关设置。`relay_bindings.json` 不迁移；`/bind` 和 `agent-bridge relay` 已删除。以前 `/bind setup` 写入项目 `AGENTS.md` 等文件的说明需手动检查，标记可能是 `cc-connect-instructions` 或 `agent-bridge-instructions`。
+4. 删除旧配置中的 `[relay]`、`[projects.heartbeat]`、cron/timer 相关设置，以及 `run_as_user`、`run_as_env`、`mode = "multi-workspace"`、`base_dir`、`skip_git`、`workspace_init_allow_local_paths`、`workspace_idle_timeout_mins`；`workspace_bindings.json` 不迁移，`agent-bridge doctor` 与 `/workspace` 已删除。`relay_bindings.json` 不迁移；`/bind` 和 `agent-bridge relay` 已删除。以前 `/bind setup` 写入项目 `AGENTS.md` 等文件的说明需手动检查，标记可能是 `cc-connect-instructions` 或 `agent-bridge-instructions`。
 5. 删除旧配置中的顶层 `language`、Claude Code 的 `inject_bridge_prompt`；新版只有英文界面，不注入任何提示词（请自行维护 `CLAUDE.md`）。`/compress` 改名为 `/compact`，`/status`、`/usage`、`/version`、`/config`、`/memory`、`/doctor`、`/web`、`/ps`、`/lang`、`/upgrade` 已删除；`/skills` 与 skill 命令也已删除，未识别的 `/xxx` 会直接透传给 Agent。顶层 `provider_presets_url` 可删除（已无预设功能），`agent-bridge provider import`/`presets` 子命令已删除。若 `disabled_commands`、别名或自定义命令引用了它们，请一并修改。
 6. `crons/`、`timers/`、`heartbeat_state.json`、`run/`、`logs/`、`agent-prompts/`、`daemon.json` 和配置锁文件不迁移。需要继续运行的任务应转到你的外部调度方案；新版不会执行旧任务，也不会清理旧任务文件。
 

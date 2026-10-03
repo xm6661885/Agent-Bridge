@@ -14,8 +14,3 @@ func RegisterWebAssets(fsys fs.FS) {
 func GetWebAssets() fs.FS {
 	return webAssetsFS
 }
-
-// WebAssetsAvailable reports whether web frontend assets are embedded.
-func WebAssetsAvailable() bool {
-	return webAssetsFS != nil
-}

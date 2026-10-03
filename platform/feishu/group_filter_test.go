@@ -25,41 +25,6 @@ import (
 // retry behaviour so a future refactor cannot quietly re-introduce the
 // fail-open regression.
 
-func TestMarkAndClearGroupFilterDegraded(t *testing.T) {
-	p := &Platform{platformName: "feishu"}
-
-	if p.IsGroupFilterDegraded() {
-		t.Fatal("fresh platform should not be degraded")
-	}
-
-	p.markGroupFilterDegraded(errors.New("connection refused"))
-	if !p.IsGroupFilterDegraded() {
-		t.Fatal("expected degraded after markGroupFilterDegraded")
-	}
-	st := p.snapshotGroupFilter()
-	if !st.Degraded {
-		t.Fatal("snapshot.Degraded should be true")
-	}
-	if st.LastError != "connection refused" {
-		t.Fatalf("snapshot.LastError = %q, want connection refused", st.LastError)
-	}
-	if st.Since.IsZero() {
-		t.Fatal("snapshot.Since should be set")
-	}
-
-	p.clearGroupFilterDegraded()
-	if p.IsGroupFilterDegraded() {
-		t.Fatal("expected cleared after clearGroupFilterDegraded")
-	}
-	st = p.snapshotGroupFilter()
-	if st.Degraded {
-		t.Fatal("snapshot.Degraded should be false after clear")
-	}
-	if st.LastError != "" {
-		t.Fatalf("snapshot.LastError = %q, want empty", st.LastError)
-	}
-}
-
 func TestPlatformHealth_ReportsConnectedWhenHealthy(t *testing.T) {
 	p := &Platform{platformName: "feishu"}
 	info := p.PlatformHealth()

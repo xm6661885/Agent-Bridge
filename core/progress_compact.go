@@ -71,30 +71,6 @@ type ProgressCardPayload struct {
 	Truncated bool                `json:"truncated"`
 }
 
-// BuildProgressCardPayload encodes progress entries into a transport string.
-// This legacy builder keeps compatibility with old callers that only send text.
-func BuildProgressCardPayload(entries []string, truncated bool) string {
-	cleaned := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		entry = strings.TrimSpace(entry)
-		if entry != "" {
-			cleaned = append(cleaned, entry)
-		}
-	}
-	if len(cleaned) == 0 {
-		return ""
-	}
-	payload := ProgressCardPayload{
-		Entries:   cleaned,
-		Truncated: truncated,
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return ProgressCardPayloadPrefix + string(b)
-}
-
 // BuildProgressCardPayloadV2 encodes ordered typed progress events.
 func BuildProgressCardPayloadV2(items []ProgressCardEntry, truncated bool, agent string, state ProgressCardState) string {
 	cleaned := make([]ProgressCardEntry, 0, len(items))
@@ -367,13 +343,6 @@ func normalizeProgressAgentLabel(name string) string {
 		}
 		return strings.ToUpper(n[:1]) + n[1:]
 	}
-}
-
-// Append appends one progress item and updates the in-place message.
-// Returns true when compact rendering handled this item; false means caller
-// should fallback to legacy per-event send.
-func (w *compactProgressWriter) Append(item string) bool {
-	return w.AppendEvent(ProgressEntryInfo, item, "", item)
 }
 
 // AppendEvent appends one typed progress event and updates the in-place message.

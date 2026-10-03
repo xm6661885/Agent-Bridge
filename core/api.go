@@ -45,7 +45,7 @@ type APIServer struct {
 type SendRequest struct {
 	Project    string            `json:"project"`
 	SessionKey string            `json:"session_key"`
-	Message    string            `json:"message"`
+	Message    string            `json:"message,omitempty"` // caption; only sent together with images/files
 	WorkDir    string            `json:"work_dir,omitempty"`
 	CWD        string            `json:"cwd,omitempty"`
 	TTSText    string            `json:"tts_text,omitempty"`
@@ -53,8 +53,6 @@ type SendRequest struct {
 	Files      []FileAttachment  `json:"files,omitempty"`
 	Audios     []FileAttachment  `json:"audios,omitempty"`
 	Videos     []FileAttachment  `json:"videos,omitempty"`
-	AtUsers    []string          `json:"at_users,omitempty"`
-	AtAll      bool              `json:"at_all,omitempty"`
 }
 
 // NewAPIServer creates an API server on a Unix socket.
@@ -88,10 +86,6 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 
 	return s, nil
-}
-
-func (s *APIServer) SocketPath() string {
-	return s.socketPath
 }
 
 func (s *APIServer) RegisterEngine(name string, e *Engine) {
@@ -175,8 +169,12 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Message == "" && strings.TrimSpace(req.TTSText) == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
-		http.Error(w, "message, tts_text, or attachment is required", http.StatusBadRequest)
+	if strings.TrimSpace(req.TTSText) == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
+		http.Error(w, "tts_text or attachment is required", http.StatusBadRequest)
+		return
+	}
+	if req.Message != "" && len(req.Images) == 0 && len(req.Files) == 0 {
+		http.Error(w, "message must accompany an image or file attachment; plain text sends are not supported", http.StatusBadRequest)
 		return
 	}
 
@@ -210,8 +208,8 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	if workDir == "" {
 		workDir = req.CWD
 	}
-	if req.Message != "" || len(req.Images) > 0 || len(req.Files) > 0 {
-		if err := engine.SendToSessionWithOptions(req.SessionKey, req.Message, req.Images, req.Files, SendOptions{WorkDir: workDir, AtUsers: req.AtUsers, AtAll: req.AtAll}); err != nil {
+	if len(req.Images) > 0 || len(req.Files) > 0 {
+		if err := engine.SendToSessionWithOptions(req.SessionKey, req.Message, req.Images, req.Files, SendOptions{WorkDir: workDir}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -268,4 +266,3 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 	apiJSON(w, http.StatusOK, result)
 }
-

@@ -260,30 +260,6 @@ const (
 	MsgSearchResult   MsgKey = "search_result"
 	MsgSearchHint     MsgKey = "search_hint"
 
-	MsgBuiltinCmdNew      MsgKey = "new"
-	MsgBuiltinCmdList     MsgKey = "list"
-	MsgBuiltinCmdSearch   MsgKey = "search"
-	MsgBuiltinCmdSwitch   MsgKey = "switch"
-	MsgBuiltinCmdDelete   MsgKey = "delete"
-	MsgBuiltinCmdName     MsgKey = "name"
-	MsgBuiltinCmdCurrent  MsgKey = "current"
-	MsgBuiltinCmdHistory  MsgKey = "history"
-	MsgBuiltinCmdProvider MsgKey = "provider"
-	MsgBuiltinCmdAllow    MsgKey = "allow"
-	MsgBuiltinCmdModel    MsgKey = "model"
-	MsgBuiltinCmdEffort   MsgKey = "effort"
-	MsgBuiltinCmdMode     MsgKey = "mode"
-	MsgBuiltinCmdQuiet    MsgKey = "quiet"
-	MsgBuiltinCmdCompact  MsgKey = "compact"
-	MsgBuiltinCmdStop     MsgKey = "stop"
-	MsgBuiltinCmdCommands MsgKey = "commands"
-	MsgBuiltinCmdAlias    MsgKey = "alias"
-	MsgBuiltinCmdRestart  MsgKey = "restart"
-	MsgBuiltinCmdHelp     MsgKey = "help"
-	MsgBuiltinCmdShell    MsgKey = "shell"
-	MsgBuiltinCmdDir      MsgKey = "dir"
-	MsgBuiltinCmdDiff     MsgKey = "diff"
-
 	MsgDiffEmpty       MsgKey = "diff_empty"
 	MsgDiffNoDiff2HTML MsgKey = "diff_no_diff2html"
 
@@ -310,41 +286,7 @@ const (
 	MsgShowReadFailed      MsgKey = "show_read_failed"
 
 	// Multi-workspace messages
-	MsgWsNotEnabled             MsgKey = "ws_not_enabled"
-	MsgWsNoBinding              MsgKey = "ws_no_binding"
-	MsgWsInfo                   MsgKey = "ws_info"
-	MsgWsInfoShared             MsgKey = "ws_info_shared"
-	MsgWsUsage                  MsgKey = "ws_usage"
-	MsgWsInitUsage              MsgKey = "ws_init_usage"
-	MsgWsBindUsage              MsgKey = "ws_bind_usage"
-	MsgWsBindSuccess            MsgKey = "ws_bind_success"
-	MsgWsBindNotFound           MsgKey = "ws_bind_not_found"
-	MsgWsRouteUsage             MsgKey = "ws_route_usage"
-	MsgWsRouteSuccess           MsgKey = "ws_route_success"
-	MsgWsRouteAbsoluteRequired  MsgKey = "ws_route_absolute_required"
-	MsgWsRouteNotFound          MsgKey = "ws_route_not_found"
-	MsgWsRouteNotDirectory      MsgKey = "ws_route_not_directory"
-	MsgWsUnbindSuccess          MsgKey = "ws_unbind_success"
-	MsgWsListEmpty              MsgKey = "ws_list_empty"
-	MsgWsListTitle              MsgKey = "ws_list_title"
-	MsgWsSharedNoBinding        MsgKey = "ws_shared_no_binding"
-	MsgWsSharedUsage            MsgKey = "ws_shared_usage"
-	MsgWsSharedBindSuccess      MsgKey = "ws_shared_bind_success"
-	MsgWsSharedRouteSuccess     MsgKey = "ws_shared_route_success"
-	MsgWsSharedUnbindSuccess    MsgKey = "ws_shared_unbind_success"
-	MsgWsSharedListEmpty        MsgKey = "ws_shared_list_empty"
-	MsgWsSharedListTitle        MsgKey = "ws_shared_list_title"
-	MsgWsSharedOnlyHint         MsgKey = "ws_shared_only_hint"
-	MsgWsNotFoundHint           MsgKey = "ws_not_found_hint"
-	MsgWsNotFoundHintGitOnly    MsgKey = "ws_not_found_hint_git_only"
-	MsgWsResolutionError        MsgKey = "ws_resolution_error"
-	MsgWsCloneProgress          MsgKey = "ws_clone_progress"
-	MsgWsCloneSuccess           MsgKey = "ws_clone_success"
-	MsgWsCloneFailed            MsgKey = "ws_clone_failed"
-	MsgWsInitDirNotFound        MsgKey = "ws_init_dir_not_found"
-	MsgWsInitInvalidTarget      MsgKey = "ws_init_invalid_target"
-	MsgWsInitLocalPathsDisabled MsgKey = "ws_init_local_paths_disabled"
-	MsgBackgroundAutoDenied     MsgKey = "background_auto_denied"
+	MsgBackgroundAutoDenied MsgKey = "background_auto_denied"
 )
 
 var messages = map[MsgKey]string{
@@ -414,7 +356,6 @@ var messages = map[MsgKey]string{
 		"/stop\n  Stop current execution\n\n" +
 		"/commands [add|del]\n  Manage custom slash commands\n\n" +
 		"/alias [add|del]\n  Manage command aliases (e.g. 帮助 → /help)\n\n" +
-		"/workspace [init]\n  Manage workspace\n\n" +
 		"/restart\n  Restart agent-bridge service\n\n" +
 		"/whoami\n  Show your User ID (for allow_from / admin_from)\n\n" +
 		"/help\n  Show this help\n\n" +
@@ -472,7 +413,7 @@ var messages = map[MsgKey]string{
 	MsgProviderAddUsage: "Usage:\n\n" +
 		"`/provider add <name> <api_key> [base_url] [model]`\n\n" +
 		"Or JSON:\n" +
-		"`/provider add {\"name\":\"relay\",\"api_key\":\"sk-xxx\",\"base_url\":\"https://...\",\"model\":\"...\"}`",
+		"`/provider add {\"name\":\"my-provider\",\"api_key\":\"sk-xxx\",\"base_url\":\"https://...\",\"model\":\"...\"}`",
 	MsgProviderAddFailed:             "Failed to add provider: %v",
 	MsgProviderRemoved:               "Provider **%s** removed.",
 	MsgCardTitleProviderAdd:          "Add Provider",
@@ -625,29 +566,6 @@ var messages = map[MsgKey]string{
 	MsgSearchNoResult:                "No sessions found matching %q",
 	MsgSearchResult:                  "Found %d session(s) matching %q:",
 	MsgSearchHint:                    "Use /switch <id> to switch to a session.",
-	MsgBuiltinCmdNew:                 "Start a new session, arg: [name]",
-	MsgBuiltinCmdList:                "List agent sessions",
-	MsgBuiltinCmdSearch:              "Search sessions by name or ID, arg: <keyword>",
-	MsgBuiltinCmdSwitch:              "Resume a session by its list number, arg: <number>",
-	MsgBuiltinCmdDelete:              "Delete session(s) by list number, args: <number> | 1,2,3 | 3-7 | 1,3-5,8",
-	MsgBuiltinCmdName:                "Name a session for easy identification, arg: [number] <text>",
-	MsgBuiltinCmdCurrent:             "Show current active session",
-	MsgBuiltinCmdHistory:             "Show last n messages, arg: [n] (default 10)",
-	MsgBuiltinCmdProvider:            "Manage API providers, arg: [list|add|remove|switch|clear]",
-	MsgBuiltinCmdAllow:               "Pre-allow a tool (next session), arg: <tool>",
-	MsgBuiltinCmdModel:               "View/switch model, arg: [name]",
-	MsgBuiltinCmdEffort:              "View/switch reasoning effort, arg: [level]",
-	MsgBuiltinCmdMode:                "View/switch permission mode, arg: [name]",
-	MsgBuiltinCmdQuiet:               "Toggle thinking/tool progress, arg: [global]",
-	MsgBuiltinCmdCompact:             "Compact conversation context",
-	MsgBuiltinCmdStop:                "Stop current execution",
-	MsgBuiltinCmdCommands:            "Manage custom slash commands, arg: [add|del]",
-	MsgBuiltinCmdAlias:               "Manage command aliases, arg: [add|del]",
-	MsgBuiltinCmdRestart:             "Restart agent-bridge service",
-	MsgBuiltinCmdHelp:                "Show this help",
-	MsgBuiltinCmdShell:               "Run a shell command, arg: <command>",
-	MsgBuiltinCmdDir:                 "Show, switch, or reset agent working directory, arg: <path>",
-	MsgBuiltinCmdDiff:                "Generate git diff as HTML file, arg: [target]",
 	MsgDiffEmpty:                     "No diff — clean working tree (or no changes vs `%s`).",
 	MsgDiffNoDiff2HTML:               "`diff2html` is not installed, sending plain text diff.\nInstall: `npm install -g diff2html-cli`",
 	MsgDirChanged:                    "Work directory changed to: `%s`\nThe next session will start in this directory.",
@@ -671,40 +589,6 @@ var messages = map[MsgKey]string{
 	MsgShowNotFound:                  "Referenced path does not exist: `%s`",
 	MsgShowDirWithLocation:           "Directory references cannot include line information: `%s`",
 	MsgShowReadFailed:                "Failed to read reference: %s",
-	MsgWsNotEnabled:                  "Workspace commands are only available in multi-workspace mode.",
-	MsgWsNoBinding:                   "No workspace bound to this channel.",
-	MsgWsInfo:                        "Workspace: `%s`\nBound: %s",
-	MsgWsInfoShared:                  "Workspace: `%s`\nBound: %s\nSource: shared",
-	MsgWsUsage:                       "Usage: `/workspace [bind <name> | route <absolute-path> | init <url> | unbind | list | shared ...]`",
-	MsgWsInitUsage:                   "Usage: `/workspace init <git-url or directory-path>`",
-	MsgWsBindUsage:                   "Usage: `/workspace bind <workspace-name>`",
-	MsgWsBindSuccess:                 "Workspace bound: `%s`",
-	MsgWsBindNotFound:                "Workspace not found: `%s`",
-	MsgWsRouteUsage:                  "Usage: `/workspace route <absolute-path>`",
-	MsgWsRouteSuccess:                "Workspace routed: `%s`",
-	MsgWsRouteAbsoluteRequired:       "Workspace route must use an absolute path: `%s`",
-	MsgWsRouteNotFound:               "Workspace path not found: `%s`",
-	MsgWsRouteNotDirectory:           "Workspace route target is not a directory: `%s`",
-	MsgWsUnbindSuccess:               "Workspace unbound.",
-	MsgWsListEmpty:                   "No workspaces bound.",
-	MsgWsListTitle:                   "Bound workspaces:",
-	MsgWsSharedNoBinding:             "No shared workspace bound to this channel.",
-	MsgWsSharedUsage:                 "Usage: `/workspace shared [bind <name> | route <absolute-path> | init <url> | unbind | list]`",
-	MsgWsSharedBindSuccess:           "Shared workspace bound: `%s`",
-	MsgWsSharedRouteSuccess:          "Shared workspace routed: `%s`",
-	MsgWsSharedUnbindSuccess:         "Shared workspace unbound.",
-	MsgWsSharedListEmpty:             "No shared workspaces bound.",
-	MsgWsSharedListTitle:             "Shared workspaces:",
-	MsgWsSharedOnlyHint:              "The current effective workspace comes from the shared layer. Use `/workspace shared unbind` to remove it.",
-	MsgWsNotFoundHint:                "No workspace found for this channel. Send a git repo URL, a local directory path, or use `/workspace init <url-or-path>`.",
-	MsgWsNotFoundHintGitOnly:         "No workspace found for this channel. Send a git repo URL or use `/workspace init <git-url>`.",
-	MsgWsResolutionError:             "Workspace resolution error: %v",
-	MsgWsCloneProgress:               "Cloning repository: %s",
-	MsgWsCloneSuccess:                "Repository cloned successfully: `%s`",
-	MsgWsCloneFailed:                 "Failed to clone repository: %v",
-	MsgWsInitDirNotFound:             "Directory not found: `%s`. Please provide a valid directory path or a git URL.",
-	MsgWsInitInvalidTarget:           "Please provide a git URL (e.g. `https://github.com/org/repo`) or a local directory path.",
-	MsgWsInitLocalPathsDisabled:      "Local directory targets are disabled for `/workspace init`. Use a git URL, or enable `workspace_init_allow_local_paths = true` for this project.",
 }
 
 func (i *I18n) T(key MsgKey) string {

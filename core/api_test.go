@@ -106,7 +106,7 @@ func TestHandleSend_UnknownProjectReturns404(t *testing.T) {
 	body, err := json.Marshal(SendRequest{
 		Project:    "projectB", // typo; does NOT match the loaded engine
 		SessionKey: "session-1",
-		Message:    "hi",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "a.png"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -138,7 +138,7 @@ func TestHandleSend_EmptyProjectFallsBackToSingleEngine(t *testing.T) {
 	body, err := json.Marshal(SendRequest{
 		// Project deliberately omitted.
 		SessionKey: "session-1",
-		Message:    "hi",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "a.png"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -163,7 +163,7 @@ func TestHandleSend_EmptyProjectMultipleEnginesRequiresName(t *testing.T) {
 
 	body, err := json.Marshal(SendRequest{
 		SessionKey: "session-1",
-		Message:    "hi",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "a.png"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -213,7 +213,7 @@ func TestHandleSend_WorkDirStartsSideSession(t *testing.T) {
 		}, nil
 	})
 
-	platform := &stubCronReplyTargetPlatform{
+	platform := &stubReplyTargetPlatform{
 		stubPlatformEngine: stubPlatformEngine{n: "test"},
 	}
 	engine := NewEngine(
@@ -232,6 +232,7 @@ func TestHandleSend_WorkDirStartsSideSession(t *testing.T) {
 		"project":     "test",
 		"session_key": sessionKey,
 		"message":     "please ask this person",
+		"files":       []FileAttachment{{MimeType: "text/plain", Data: []byte("x"), FileName: "a.txt"}},
 		"work_dir":    targetDir,
 	})
 	if err != nil {
@@ -298,7 +299,7 @@ func TestHandleSend_WorkDirFollowsDirectParticipantOnInboundSession(t *testing.T
 		}, nil
 	})
 
-	platform := &stubCronReplyTargetPlatform{
+	platform := &stubReplyTargetPlatform{
 		stubPlatformEngine: stubPlatformEngine{n: "test"},
 	}
 	engine := NewEngine(
@@ -317,6 +318,7 @@ func TestHandleSend_WorkDirFollowsDirectParticipantOnInboundSession(t *testing.T
 		"project":     "test",
 		"session_key": syntheticKey,
 		"message":     "please ask this person",
+		"files":       []FileAttachment{{MimeType: "text/plain", Data: []byte("x"), FileName: "a.txt"}},
 		"work_dir":    targetDir,
 	})
 	if err != nil {
@@ -392,4 +394,15 @@ func TestSetMaxAttachmentSize_ConcurrentSafe(t *testing.T) {
 		_ = api.sendBodyLimit()
 	}
 	<-done
+}
+
+func TestHandleSend_RejectsTextOnly(t *testing.T) {
+	engine := NewEngine("solo", &stubAgent{}, []Platform{&stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}}, "")
+	api := &APIServer{engines: map[string]*Engine{"solo": engine}}
+	body, _ := json.Marshal(map[string]any{"message": "hi"})
+	rec := httptest.NewRecorder()
+	api.handleSend(rec, httptest.NewRequest(http.MethodPost, "/send", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
 }

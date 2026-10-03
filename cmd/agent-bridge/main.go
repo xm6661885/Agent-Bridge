@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -214,7 +213,6 @@ var topLevelCommandHandlers = map[string]func([]string){
 	"daemon":    runDaemon,
 	"feishu":    runFeishu,
 	"weixin":    runWeixin,
-	"doctor":    runDoctor,
 	"web":       runWeb,
 }
 
@@ -326,31 +324,10 @@ func main() {
 
 	setupLogger(cfg.Log.Level, logWriter)
 
-	// run_as_user preflight + isolation audit. MUST run before any engine
-	// or agent is constructed. If any project fails, abort startup
-	// entirely — never half-spawn. See core/runas_check.go and
-	// core/runas_audit.go for the checks themselves.
-	if err := runRunAsUserStartupChecks(context.Background(), cfg); err != nil {
-		slog.Error("run_as_user: startup checks failed, refusing to start", "error", err)
-		os.Exit(1)
-	}
-
 	engines := make([]*core.Engine, 0, len(cfg.Projects))
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
 	for _, proj := range cfg.Projects {
-		// Inject project-level run_as_user / run_as_env into the agent's
-		// opts map so agents that support isolation can pick them up
-		// without needing their own top-level config plumbing.
-		if proj.RunAsUser != "" {
-			if proj.Agent.Options == nil {
-				proj.Agent.Options = map[string]any{}
-			}
-			proj.Agent.Options["run_as_user"] = proj.RunAsUser
-			if len(proj.RunAsEnv) > 0 {
-				proj.Agent.Options["run_as_env"] = proj.RunAsEnv
-			}
-		}
 		agent, err := core.CreateAgent(proj.Agent.Type, buildAgentOptions(cfg.DataDir, proj))
 		if err != nil {
 			slog.Error("failed to create agent", "project", proj.Name, "error", err)
@@ -397,42 +374,6 @@ func main() {
 		engine.SetBaseWorkDir(workDir)
 		engine.SetProjectStateStore(projectState)
 		engine.SetDataDir(cfg.DataDir)
-
-		// Wire multi-workspace mode
-		if proj.Mode == "multi-workspace" {
-			baseDir := proj.BaseDir
-			if strings.HasPrefix(baseDir, "~/") {
-				home, _ := os.UserHomeDir()
-				baseDir = filepath.Join(home, baseDir[2:])
-			}
-			if err := os.MkdirAll(baseDir, 0o755); err != nil {
-				slog.Error("failed to create base_dir", "path", baseDir, "err", err)
-				continue
-			}
-			bindingStore := filepath.Join(cfg.DataDir, "workspace_bindings.json")
-			engine.SetMultiWorkspace(baseDir, bindingStore)
-			if proj.WorkspaceInitAllowLocalPaths != nil {
-				engine.SetWorkspaceInitAllowLocalPaths(*proj.WorkspaceInitAllowLocalPaths)
-			}
-			idleMins := cfg.WorkspaceIdleTimeoutMins
-			if idleMins == nil && proj.WorkspaceIdleTimeoutMinsLegacy != nil {
-				slog.Warn("workspace_idle_timeout_mins under [[projects]] is deprecated; move it to the top level of config.toml. Honoring the legacy value for backwards compatibility.",
-					"project", proj.Name, "value", *proj.WorkspaceIdleTimeoutMinsLegacy)
-				idleMins = proj.WorkspaceIdleTimeoutMinsLegacy
-			}
-			if idleMins != nil {
-				mins := *idleMins
-				if mins <= 0 {
-					engine.SetWorkspaceIdleTimeout(0)
-				} else {
-					engine.SetWorkspaceIdleTimeout(time.Duration(mins) * time.Minute)
-				}
-			}
-			if proj.SkipGit != nil {
-				engine.SetSkipGit(*proj.SkipGit)
-			}
-			slog.Info("multi-workspace mode enabled", "project", proj.Name, "base_dir", baseDir)
-		}
 
 		// Wire terminal observation (--observe / [projects.observe])
 		observeEnabled := rootOpts.observe
@@ -1477,8 +1418,9 @@ Commands:
     status           Show daemon status
     logs             View daemon logs (-f to follow, -n N for last N lines)
 
-  send               Send a message to an active session via internal API
-                     (-m <text> | --stdin, -p <project>, -s <session>)
+  send               Send attachments or TTS voice to an active session
+                     (--image|--file|--audio|--video <path>, --tts <text>,
+                      -m <caption> with image/file only, -p <project>, -s <session>)
 
 
   sessions           Browse session history
@@ -1514,7 +1456,7 @@ Examples:
   agent-bridge --config /path/to.toml   Start with a specific config file
   agent-bridge daemon install           Install as a system service
   agent-bridge daemon logs -f           Follow daemon logs
-  agent-bridge send -m "hello"          Send a message to the active session
+  agent-bridge send --file report.pdf   Send a file to the active session
   agent-bridge feishu setup             Setup Feishu/Lark bot credentials
   agent-bridge weixin setup             Setup Weixin (ilink) with QR or --token
   agent-bridge config format            Format the config file

@@ -1480,7 +1480,6 @@ func TestMgmt_GlobalProviders_DeleteNotFound(t *testing.T) {
 	}
 }
 
-
 // ── Cron PATCH (update job) ──
 
 // ── Project routes: unknown sub-path ──
@@ -1542,7 +1541,6 @@ func TestMgmt_Config_Save(t *testing.T) {
 		t.Fatal("expected error without config file path set")
 	}
 }
-
 
 // ────────────────────────────────────────────────────────────────
 // Edge cases & boundary tests below
@@ -2289,7 +2287,6 @@ func TestMgmt_Reload_NoReloadFunc(t *testing.T) {
 		t.Fatalf("reload with nil reloadFunc should succeed: %s", r.Error)
 	}
 }
-
 
 // TestMgmt_SetupWeixinPoll_RejectsMalformedAPIURL is a regression test for a
 // nil-pointer panic in handleSetupWeixinPoll. The handler did

@@ -16,7 +16,7 @@ level = "info"
 # Optional: default is ~/.agent-bridge. Change absolute old paths manually.
 # data_dir = "/home/user/.agent-bridge"
 
-# Optional: external schedulers may call the webhook or `agent-bridge send`.
+# Optional: external schedulers may call the webhook.
 # [webhook]
 # enabled = true
 # listen = "127.0.0.1:8080"

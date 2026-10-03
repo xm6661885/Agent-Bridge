@@ -16,67 +16,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// validRunAsUserName is the portable-username character set plus digits.
-// POSIX does not require a specific pattern, but every mainstream Linux and
-// macOS system accepts these characters for login names. Rejecting anything
-// outside this set removes an injection vector into the sudo argv.
-func isValidRunAsUserName(name string) bool {
-	if name == "" || len(name) > 32 {
-		return false
-	}
-	for i, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r == '_':
-		case r >= '0' && r <= '9' && i > 0:
-		case (r == '-' || r == '.') && i > 0:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-var dangerousEnvVars = map[string]bool{
-	"LD_PRELOAD":            true,
-	"LD_LIBRARY_PATH":       true,
-	"DYLD_INSERT_LIBRARIES": true,
-	"DYLD_LIBRARY_PATH":     true,
-	"PATH":                  true,
-	"HOME":                  true,
-	"USER":                  true,
-	"SHELL":                 true,
-	"SUDO_USER":             true,
-	"SUDO_COMMAND":          true,
-}
-
-func validateRunAsEnv(prefix string, envVars []string) error {
-	for _, v := range envVars {
-		name := strings.TrimSpace(v)
-		if dangerousEnvVars[strings.ToUpper(name)] {
-			return fmt.Errorf("config: %s.run_as_env must not include dangerous variable %q", prefix, name)
-		}
-	}
-	return nil
-}
-
-func validateRunAsUser(prefix, name string) error {
-	if name == "" {
-		return nil
-	}
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("config: %s.run_as_user is only supported on Linux/macOS", prefix)
-	}
-	if name == "root" || name == "0" {
-		return fmt.Errorf("config: %s.run_as_user must not be root", prefix)
-	}
-	if !isValidRunAsUserName(name) {
-		return fmt.Errorf("config: %s.run_as_user %q contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .; must start with a letter or underscore)", prefix, name)
-	}
-	return nil
-}
-
 // configMu serializes read-modify-write cycles to prevent lost updates.
 var configMu sync.Mutex
 
@@ -109,12 +48,6 @@ type Config struct {
 	Hooks             []HookConfig            `toml:"hooks"`
 	IdleTimeoutMins   *int                    `toml:"idle_timeout_mins,omitempty"`  // max minutes between consecutive agent events; 0 = no timeout; default 120
 	MaxTurnTimeMins   *int                    `toml:"max_turn_time_mins,omitempty"` // absolute wall-clock cap per turn in minutes; 0 = disabled (default)
-	// WorkspaceIdleTimeoutMins controls the workspace idle reaper timeout
-	// (multi-workspace mode) for every engine in the process. 0 disables
-	// reaping. Default: 15 minutes. Defined as a top-level (process-global)
-	// setting so the reaper policy is consistent across projects; per-project
-	// configuration is intentionally not supported.
-	WorkspaceIdleTimeoutMins *int `toml:"workspace_idle_timeout_mins,omitempty"`
 	// Shell overrides the default shell used for /shell commands,
 	// hooks, and webhook exec. On Unix the default is "sh"; on Windows it is
 	// "powershell.exe". Set to an absolute path (e.g. "/bin/zsh") to use a
@@ -443,18 +376,10 @@ func expandUserPath(path string) string {
 }
 
 type ProjectConfig struct {
-	Name    string `toml:"name"`
-	Mode    string `toml:"mode,omitempty"`     // "" or "multi-workspace"
-	BaseDir string `toml:"base_dir,omitempty"` // parent dir for workspaces
-	SkipGit *bool  `toml:"skip_git,omitempty"`
-	// WorkspaceInitAllowLocalPaths allows /workspace init and the conversational
-	// init flow to bind existing local directories. Default false keeps init
-	// limited to git URLs; use /workspace bind or /workspace route for explicit
-	// local bindings.
-	WorkspaceInitAllowLocalPaths *bool              `toml:"workspace_init_allow_local_paths,omitempty"`
-	Agent                        AgentConfig        `toml:"agent"`
-	Platforms                    []PlatformConfig   `toml:"platforms"`
-	AutoCompress                 AutoCompressConfig `toml:"auto_compress"`
+	Name         string             `toml:"name"`
+	Agent        AgentConfig        `toml:"agent"`
+	Platforms    []PlatformConfig   `toml:"platforms"`
+	AutoCompress AutoCompressConfig `toml:"auto_compress"`
 	// ResetOnIdleMins automatically rotates to a new agent-bridge session after
 	// the current session has been inactive for the specified number of minutes.
 	// 0 or nil disables the behavior.
@@ -462,20 +387,6 @@ type ProjectConfig struct {
 	// AgentSessionIdleTimeoutMins 在指定分钟数后关闭空闲的 live agent 进程，
 	// 同时保留已保存的 session ID，便于下一条消息继续恢复。0 或 nil 表示禁用。
 	AgentSessionIdleTimeoutMins *int `toml:"agent_session_idle_timeout_mins,omitempty"`
-	// RunAsUser, when set, causes the agent command for this project to be
-	// spawned under a different Unix user via `sudo -n -iu <user> --`. This
-	// provides OS-level file-system isolation from the supervisor user who
-	// runs agent-bridge itself. Requires passwordless sudo to the target user
-	// and is POSIX-only. See docs/usage.md "Running agents as a different
-	// Unix user" for setup and migration.
-	RunAsUser string `toml:"run_as_user,omitempty"`
-	// RunAsEnv optionally extends the minimal environment variable allowlist
-	// that crosses the sudo boundary when RunAsUser is set. The default
-	// allowlist (LANG, LC_*, TERM) is always included; PATH is NOT preserved
-	// by default — the target user's login PATH is used. Dangerous variables
-	// (LD_PRELOAD, PATH, HOME, etc.) are rejected at config validation.
-	// Use this only for variables the target user cannot set in their profile.
-	RunAsEnv []string `toml:"run_as_env,omitempty"`
 	// ShowContextIndicator: nil/true = render the reply footer's first line
 	// (model · effort · token usage · context %); false = hide that line.
 	// Subordinate to ReplyFooter — the master footer toggle.
@@ -490,12 +401,6 @@ type ProjectConfig struct {
 	DisabledCommands []string     `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "shell"])
 	AdminFrom        string       `toml:"admin_from,omitempty"`        // comma-separated user IDs allowed to run privileged commands; "*" = all allowed users
 	Users            *UsersConfig `toml:"users,omitempty"`             // per-user role config; nil = legacy behavior
-	// WorkspaceIdleTimeoutMinsLegacy is the deprecated per-project form of
-	// the workspace idle reaper timeout. New configs should set the top-level
-	// Config.WorkspaceIdleTimeoutMins instead. When the top-level field is
-	// unset, this legacy value is still honored (with a deprecation warning)
-	// to keep existing configs working. Will be removed in a future release.
-	WorkspaceIdleTimeoutMinsLegacy *int `toml:"workspace_idle_timeout_mins,omitempty"`
 	// Quiet is legacy per-project override; see Config.Quiet. When true and global [display]
 	// omits thinking_messages / tool_messages, those default to off for this project.
 	Quiet *bool `toml:"quiet,omitempty"`
@@ -1031,25 +936,11 @@ func (c *Config) validateInternal(permissive bool) error {
 				return fmt.Errorf("config: %s.platforms[%d].type %q is unsupported; use feishu, lark, weixin, telegram, qq, or qqbot", prefix, j, p.Type)
 			}
 		}
-		if proj.Mode == "multi-workspace" {
-			if proj.BaseDir == "" {
-				return fmt.Errorf("project %q: multi-workspace mode requires base_dir", proj.Name)
-			}
-			if _, ok := proj.Agent.Options["work_dir"]; ok {
-				return fmt.Errorf("project %q: multi-workspace mode conflicts with agent work_dir (use base_dir instead)", proj.Name)
-			}
-		}
 		if proj.ResetOnIdleMins != nil && *proj.ResetOnIdleMins < 0 {
 			return fmt.Errorf("config: %s.reset_on_idle_mins must be >= 0", prefix)
 		}
 		if proj.AgentSessionIdleTimeoutMins != nil && *proj.AgentSessionIdleTimeoutMins < 0 {
 			return fmt.Errorf("config: %s.agent_session_idle_timeout_mins must be >= 0", prefix)
-		}
-		if err := validateRunAsUser(prefix, proj.RunAsUser); err != nil {
-			return err
-		}
-		if err := validateRunAsEnv(prefix, proj.RunAsEnv); err != nil {
-			return err
 		}
 		if err := validateReferenceConfig(prefix, proj.References); err != nil {
 			return err

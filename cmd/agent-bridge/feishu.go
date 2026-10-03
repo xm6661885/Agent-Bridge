@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"agent-bridge/config"
+
 	qrterminal "github.com/mdp/qrterminal/v3"
 	"rsc.io/qr"
 )

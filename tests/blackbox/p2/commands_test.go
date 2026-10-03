@@ -59,7 +59,6 @@ func TestP2_45_AgentSid_ClaudeCode(t *testing.T) {
 	t.Logf("P2-45 OK: %q", truncate(text, 150))
 }
 
-
 // ── P2-40: /quiet ────────────────────────────────────────────────────────────
 
 func TestP2_40_Quiet_ClaudeCode(t *testing.T) {

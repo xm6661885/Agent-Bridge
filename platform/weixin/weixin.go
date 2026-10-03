@@ -70,18 +70,6 @@ const (
 // is per-account, but the counter is only observability and reset on restart.
 var pushBudgetExceededCounter atomic.Int64
 
-// PushBudgetExceededTotal returns how many times the push-path burst budget
-// has blocked a send since process start. Replies are not counted because they
-// bypass the quota entirely.
-func PushBudgetExceededTotal() int64 {
-	return pushBudgetExceededCounter.Load()
-}
-
-// resetPushBudgetExceededCounter is for tests only.
-func resetPushBudgetExceededCounter() {
-	pushBudgetExceededCounter.Store(0)
-}
-
 type replyContext struct {
 	peerUserID   string
 	contextToken string
@@ -641,7 +629,7 @@ func (p *Platform) Reply(ctx context.Context, replyCtx any, content string) erro
 	return p.sendChunks(ctx, replyCtx, content, sendPathReply)
 }
 
-// Send proactively pushes a message to the user (cron / timer / Relay). Pushes
+// Send proactively pushes a message to the user (webhook / agent-bridge send). Pushes
 // count against the burst budget because ilink DOES throttle proactive sends
 // (see #1643 / #1742).
 func (p *Platform) Send(ctx context.Context, replyCtx any, content string) error {

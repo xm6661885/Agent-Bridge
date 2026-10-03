@@ -441,17 +441,10 @@ type Engine struct {
 	shellFlag    string // shell flag (e.g. "-c", "-Command", "/C")
 	shellProfile string // prepended to every command (e.g. "source ~/.zshrc;")
 
-	// Multi-workspace mode
-	multiWorkspace               bool
-	baseDir                      string
-	skipGit                      bool
-	workspaceInitAllowLocalPaths bool
-	workspaceBindings            *WorkspaceBindingManager
-	workspacePool                *workspacePool
-	initFlows                    map[string]*workspaceInitFlow // workspace channel key → init state
-	initFlowsMu                  sync.Mutex
-	sendWorkDirMu                sync.RWMutex
-	sendWorkDirs                 map[string]string // sessionKey → work_dir assigned by send --cwd
+	// Per-work_dir agents created by send --cwd
+	workspacePool *workspacePool
+	sendWorkDirMu sync.RWMutex
+	sendWorkDirs  map[string]string // sessionKey → work_dir assigned by send --cwd
 
 	// Terminal observation (--observe)
 	observeEnabled    bool
@@ -507,14 +500,6 @@ type Engine struct {
 
 	// Data directory for socket path injection
 	dataDir string
-}
-
-// workspaceInitFlow tracks a channel that is being onboarded to a workspace.
-type workspaceInitFlow struct {
-	state       string // "awaiting_url", "awaiting_confirm"
-	repoURL     string
-	cloneTo     string
-	channelName string
 }
 
 // queuedMessage holds a message that arrived while the session was busy.
@@ -819,82 +804,6 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 // before the reaper reclaims it.
 const DefaultWorkspaceIdleTimeout = 15 * time.Minute
 
-// SetMultiWorkspace enables multi-workspace mode for the engine.
-func (e *Engine) SetMultiWorkspace(baseDir, bindingStorePath string) {
-	e.multiWorkspace = true
-	e.baseDir = baseDir
-	e.workspaceBindings = NewWorkspaceBindingManager(bindingStorePath)
-	e.workspacePool = newWorkspacePool(DefaultWorkspaceIdleTimeout)
-	e.initFlows = make(map[string]*workspaceInitFlow)
-	go e.runIdleReaper()
-}
-
-// SetWorkspaceIdleTimeout overrides the workspace idle reaper timeout.
-// Must be called after SetMultiWorkspace. A zero value disables reaping.
-func (e *Engine) SetWorkspaceIdleTimeout(d time.Duration) {
-	if e.workspacePool != nil {
-		e.workspacePool.mu.Lock()
-		e.workspacePool.idleTimeout = d
-		e.workspacePool.mu.Unlock()
-	}
-}
-
-// SetWorkspaceInitAllowLocalPaths controls whether workspace init accepts
-// existing local directories as targets. When false, init remains git-URL only.
-func (e *Engine) SetWorkspaceInitAllowLocalPaths(allow bool) {
-	e.workspaceInitAllowLocalPaths = allow
-}
-
-func (e *Engine) runIdleReaper() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case <-ticker.C:
-			e.reapIdleWorkspaces()
-		}
-	}
-}
-
-func (e *Engine) reapIdleWorkspaces() {
-	if e.workspacePool == nil {
-		return
-	}
-
-	reaped := e.workspacePool.ReapIdle()
-	if len(reaped) == 0 {
-		return
-	}
-
-	reapedSet := make(map[string]struct{}, len(reaped))
-	for _, ws := range reaped {
-		reapedSet[ws] = struct{}{}
-	}
-
-	type cleanupTarget struct {
-		key   string
-		state *interactiveState
-	}
-
-	var targets []cleanupTarget
-	e.interactiveMu.Lock()
-	for key, state := range e.interactiveStates {
-		if _, ok := reapedSet[state.workspaceDir]; ok {
-			targets = append(targets, cleanupTarget{key: key, state: state})
-		}
-	}
-	e.interactiveMu.Unlock()
-
-	for _, target := range targets {
-		e.cleanupInteractiveState(target.key, target.state)
-	}
-	for _, ws := range reaped {
-		slog.Info("workspace idle-reaped", "workspace", ws)
-	}
-}
-
 // SetHooks configures the lifecycle event hook manager.
 func (e *Engine) SetHooks(hm *HookManager) {
 	e.hooks = hm
@@ -934,11 +843,6 @@ func (e *Engine) SetInstantReply(cfg InstantReplyCfg) {
 // SetReferenceConfig configures local reference normalization/rendering.
 func (e *Engine) SetReferenceConfig(cfg ReferenceRenderCfg) {
 	e.references = normalizeReferenceRenderCfg(cfg)
-}
-
-// estimateTokens provides a rough token estimate for a set of history entries.
-func estimateTokens(entries []HistoryEntry) int {
-	return estimateTokensWithPendingAssistant(entries, "")
 }
 
 // estimateTokensWithPendingAssistant is like estimateTokens but includes an assistant
@@ -1032,10 +936,6 @@ func (e *Engine) SetFilterExternalSessions(v bool) {
 
 func (e *Engine) SetWebSetupFunc(fn func() (int, string, bool, error)) { e.webSetupFunc = fn }
 func (e *Engine) SetWebStatusFunc(fn func() string)                    { e.webStatusFunc = fn }
-
-func (e *Engine) SetSkipGit(skipGit bool) {
-	e.skipGit = skipGit
-}
 
 // SetInjectSender controls whether sender identity (platform and user ID) is
 // prepended to each message before forwarding it to the agent. When enabled,
@@ -1973,65 +1873,6 @@ func (e *Engine) stopCurrentMessageIfRecalled(sessionKey string) bool {
 	return false
 }
 
-// interruptAndRetryLock checks whether the currently-running agent session
-// for interactiveKey supports AgentSessionCanceller, and if so, cancels its
-// in-flight turn and re-acquires the session lock so the caller can proceed
-// with a fresh turn on the same session instead of queueing behind the old
-// one. Returns true if the lock was successfully re-acquired after a
-// successful cancel (caller should treat this exactly like a normal
-// TryLock() success). Returns false if the session doesn't support
-// cancellation, has no live agent session, or the cancel/relock failed —
-// callers should fall back to existing behavior (queueMessageForBusySession)
-// in that case.
-//
-// Does NOT discard the interrupted turn's output: CancelTurn's own contract
-// (see agent/claudecode and agent/codex implementations) is to block until
-// the interrupted turn's own EventResult has already been delivered through
-// the normal event pipeline (history, reply rendering, etc. all run exactly
-// as for any other turn completion) before returning. By the time this
-// function re-acquires the lock, that pipeline has already finished — no
-// special-case suppression is needed or added here.
-func (e *Engine) interruptAndRetryLock(interactiveKey string, session *Session) bool {
-	e.interactiveMu.Lock()
-	state, ok := e.interactiveStates[interactiveKey]
-	e.interactiveMu.Unlock()
-	if !ok || state == nil {
-		return false
-	}
-
-	state.mu.Lock()
-	agentSession := state.agentSession
-	state.mu.Unlock()
-	if agentSession == nil || !agentSession.Alive() {
-		return false
-	}
-
-	canceller, ok := agentSession.(AgentSessionCanceller)
-	if !ok {
-		return false
-	}
-
-	if err := canceller.CancelTurn(); err != nil {
-		slog.Warn("interrupt-on-new-message: CancelTurn failed, falling back to queue",
-			"session_key", interactiveKey, "error", err)
-		return false
-	}
-
-	// CancelTurn blocked until the interrupted turn's own completion pipeline
-	// ran (including session.Unlock() from processInteractiveEvents /
-	// drainPendingMessages), so the lock should now be free. Use a short
-	// bounded wait as a safety margin against any residual scheduling delay.
-	if !e.waitForSessionLock(session, recalledStopLockWait) {
-		slog.Warn("interrupt-on-new-message: session still locked after successful CancelTurn",
-			"session_key", interactiveKey)
-		return false
-	}
-
-	slog.Info("interrupt-on-new-message: cancelled in-flight turn, starting new turn on same session",
-		"session_key", interactiveKey)
-	return true
-}
-
 // steerBusySession injects a new user message into the in-flight turn. The
 // acknowledgement is deliberately sent before the protocol round-trip so the
 // platform handler returns immediately instead of falling back to the queue
@@ -2214,13 +2055,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		}
 	}
 
-	// Multi-workspace resolution
+	// send --cwd work_dir resolution
 	var wsAgent Agent
 	var wsSessions *SessionManager
 	var resolvedWorkspace string
-	if e.multiWorkspace {
-		e.migrateLegacyWorkspaceBindings(msg)
-	}
 	if forcedWorkDir := e.sendWorkDirForSession(msg.SessionKey); forcedWorkDir != "" {
 		e.bindSendWorkDir(msg.SessionKey, forcedWorkDir)
 		var err error
@@ -2231,47 +2069,6 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 			return
 		}
 		resolvedWorkspace = forcedWorkDir
-	} else if e.multiWorkspace {
-		channelID := effectiveChannelID(msg)
-		channelKey := effectiveWorkspaceChannelKey(msg)
-		workspace, channelName, err := e.resolveWorkspace(p, channelID)
-		if err != nil {
-			slog.Error("workspace resolution failed", "err", err)
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-			return
-		}
-		if workspace == "" {
-			// No workspace — handle init flow (unless it's a /workspace command)
-			if !strings.HasPrefix(content, "/workspace") && !strings.HasPrefix(content, "/ws ") {
-				if e.handleWorkspaceInitFlow(p, msg, channelName) {
-					return
-				}
-			} else {
-				// Workspace command bypassed the init flow; clean up any stale flow
-				// so it doesn't interfere if the channel becomes unbound again later.
-				e.initFlowsMu.Lock()
-				delete(e.initFlows, channelKey)
-				e.initFlowsMu.Unlock()
-			}
-			// If init flow didn't consume, only workspace commands work
-			if !strings.HasPrefix(content, "/") {
-				return
-			}
-		} else {
-			// Touch for idle tracking
-			if ws := e.workspacePool.Get(workspace); ws != nil {
-				ws.Touch()
-			}
-
-			var effectiveWorkspace string
-			wsAgent, wsSessions, _, effectiveWorkspace, err = e.workspaceContext(workspace, msg.SessionKey)
-			if err != nil {
-				slog.Error("failed to create workspace agent", "workspace", workspace, "err", err)
-				e.reply(p, msg.ReplyCtx, fmt.Sprintf("Failed to initialize workspace: %v", err))
-				return
-			}
-			resolvedWorkspace = effectiveWorkspace
-		}
 	}
 
 	// Select session manager and agent based on workspace mode
@@ -3318,12 +3115,6 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 	// workspace-specific overrides always win
 	opts["work_dir"] = workspace
 
-	if e.projectState != nil {
-		if m := e.projectState.WorkspaceModelOverride(workspace); m != "" {
-			opts["model"] = m
-		}
-	}
-
 	// Copy model from original agent if possible
 	if _, ok := opts["model"]; !ok {
 		if ma, ok := e.agent.(interface{ GetModel() string }); ok {
@@ -3337,24 +3128,6 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 		if ma, ok := e.agent.(interface{ GetMode() string }); ok {
 			if m := ma.GetMode(); m != "" {
 				opts["mode"] = m
-			}
-		}
-	}
-	// Copy run_as_user (and run_as_env) for OS-level isolation. Without
-	// this, per-workspace agents silently bypass the project-level
-	// run_as_user config because their opts map is freshly constructed
-	// above, not inherited from the project-level opts that main.go
-	// already decorated. See agent-bridge#496 and the agent-bridge/core/runas.go
-	// preamble for why run_as_user has to survive this copy.
-	if _, ok := opts["run_as_user"]; !ok {
-		if u := e.runAsUser(); u != "" {
-			opts["run_as_user"] = u
-		}
-	}
-	if _, ok := opts["run_as_env"]; !ok {
-		if ma, ok := e.agent.(interface{ GetRunAsEnv() []string }); ok {
-			if env := ma.GetRunAsEnv(); len(env) > 0 {
-				opts["run_as_env"] = env
 			}
 		}
 	}
@@ -3383,32 +3156,6 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 	ws.agent = agent
 	ws.sessions = sessions
 	return agent, sessions, nil
-}
-
-func (e *Engine) resolveChannelWorkDir(workspace, interactiveKey string) string {
-	if e.projectState == nil {
-		return workspace
-	}
-	override := e.projectState.WorkspaceDirOverride(interactiveKey)
-	if override == "" {
-		return workspace
-	}
-	if info, err := os.Stat(override); err == nil && info.IsDir() {
-		return override
-	}
-	e.projectState.ClearWorkspaceDirOverride(interactiveKey)
-	e.projectState.Save()
-	return workspace
-}
-
-func (e *Engine) workspaceContext(workspace, sessionKey string) (Agent, *SessionManager, string, string, error) {
-	interactiveKey := workspace + ":" + sessionKey
-	effectiveDir := e.resolveChannelWorkDir(workspace, interactiveKey)
-	wsAgent, wsSessions, err := e.getOrCreateWorkspaceAgent(effectiveDir)
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	return wsAgent, wsSessions, interactiveKey, effectiveDir, nil
 }
 
 // getOrCreateInteractiveStateWith accepts an optional agent override for multi-workspace mode.
@@ -5985,7 +5732,6 @@ var builtinCommands = []struct {
 	{[]string{"show"}, "show"},
 	{[]string{"dir", "cd", "chdir", "workdir"}, "dir"},
 	{[]string{"tts"}, "tts"},
-	{[]string{"workspace", "ws"}, "workspace"},
 	{[]string{"whoami", "myid"}, "whoami"},
 	{[]string{"diff"}, "diff"},
 }
@@ -6167,13 +5913,6 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdDir(p, msg, args)
 	case "tts":
 		e.cmdTTS(p, msg, args)
-	case "workspace":
-		if !e.multiWorkspace {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsNotEnabled))
-			return true
-		}
-		e.handleWorkspaceCommand(p, msg, args)
-		return true
 	case "whoami":
 		e.cmdWhoami(p, msg)
 	default:
@@ -6197,251 +5936,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	return true
 }
 
-func (e *Engine) handleWorkspaceCommand(p Platform, msg *Message, args []string) {
-	channelID := effectiveChannelID(msg)
-	channelKey := effectiveWorkspaceChannelKey(msg)
-	projectKey := "project:" + e.name
-	resolveChannelName := func() func() string {
-		resolved := false
-		channelName := ""
-		return func() string {
-			if resolved {
-				return channelName
-			}
-			resolved = true
-			if resolver, ok := p.(ChannelNameResolver); ok {
-				channelName, _ = resolver.ResolveChannelName(channelID)
-			}
-			return channelName
-		}
-	}()
-	replyWorkspaceInfo := func(b *WorkspaceBinding, bindingKey string) {
-		if bindingKey == sharedWorkspaceBindingsKey {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInfoShared, b.Workspace, b.BoundAt.Format(time.RFC3339)))
-			return
-		}
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInfo, b.Workspace, b.BoundAt.Format(time.RFC3339)))
-	}
-	routeWorkspace := func(bindingKey string, pathParts []string, usageKey, successKey MsgKey) bool {
-		routePath := strings.TrimSpace(strings.Join(pathParts, " "))
-		if routePath == "" {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(usageKey))
-			return false
-		}
-		if !filepath.IsAbs(routePath) {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsRouteAbsoluteRequired, routePath))
-			return false
-		}
-
-		info, err := os.Stat(routePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsRouteNotFound, routePath))
-			} else {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-			}
-			return false
-		}
-		if !info.IsDir() {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsRouteNotDirectory, routePath))
-			return false
-		}
-
-		normalizedPath := normalizeWorkspacePath(routePath)
-		e.workspaceBindings.Bind(bindingKey, channelKey, resolveChannelName(), normalizedPath)
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(successKey, normalizedPath))
-		return true
-	}
-	bindWorkspace := func(bindingKey, wsName string, successKey MsgKey) bool {
-		wsPath := filepath.Join(e.baseDir, wsName)
-
-		// Check if workspace directory exists
-		if _, err := os.Stat(wsPath); os.IsNotExist(err) {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsBindNotFound, wsName))
-			return false
-		}
-
-		e.workspaceBindings.Bind(bindingKey, channelKey, resolveChannelName(), normalizeWorkspacePath(wsPath))
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(successKey, wsName))
-		return true
-	}
-	initWorkspace := func(bindingKey, target string, successKey MsgKey) bool {
-		// Support local directory paths (absolute or relative to baseDir).
-		if e.workspaceInitAllowLocalPaths && looksLikeLocalDir(target) {
-			dirPath, err := resolveLocalDirPath(target, e.baseDir)
-			if err != nil {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInitDirNotFound, target))
-				return false
-			}
-			info, statErr := os.Stat(dirPath)
-			if statErr != nil || !info.IsDir() {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInitDirNotFound, target))
-				return false
-			}
-			e.workspaceBindings.Bind(bindingKey, channelKey, resolveChannelName(), normalizeWorkspacePath(dirPath))
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsBindSuccess, dirPath))
-			return true
-		}
-		if !e.workspaceInitAllowLocalPaths && looksLikeLocalDir(target) && !looksLikeGitURL(target) {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsInitLocalPathsDisabled))
-			return false
-		}
-
-		if !looksLikeGitURL(target) {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsInitInvalidTarget))
-			return false
-		}
-
-		repoName := extractRepoName(target)
-		cloneTo := filepath.Join(e.baseDir, repoName)
-
-		if _, err := os.Stat(cloneTo); err == nil {
-			e.workspaceBindings.Bind(bindingKey, channelKey, resolveChannelName(), normalizeWorkspacePath(cloneTo))
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(successKey, cloneTo))
-			return true
-		}
-
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsCloneProgress, target))
-
-		if err := gitClone(target, cloneTo); err != nil {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsCloneFailed, err))
-			return false
-		}
-
-		e.workspaceBindings.Bind(bindingKey, channelKey, resolveChannelName(), normalizeWorkspacePath(cloneTo))
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(successKey, cloneTo))
-		return true
-	}
-	listBindings := func(bindingKey string, emptyKey, titleKey MsgKey) {
-		bindings := e.workspaceBindings.ListByProject(bindingKey)
-		if len(bindings) == 0 {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(emptyKey))
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString(e.i18n.T(titleKey) + "\n")
-		for chID, b := range bindings {
-			name := b.ChannelName
-			if name == "" {
-				name = chID
-			}
-			sb.WriteString(fmt.Sprintf("• #%s → `%s`\n", name, b.Workspace))
-		}
-		e.reply(p, msg.ReplyCtx, sb.String())
-	}
-
-	subCmd := ""
-	if len(args) > 0 {
-		subCmd = matchSubCommand(args[0], []string{"init", "bind", "route", "unbind", "list", "shared"})
-	}
-
-	switch subCmd {
-	case "":
-		b, bindingKey, usable := e.lookupEffectiveWorkspaceBinding(channelKey)
-		if !usable {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsNoBinding))
-		} else {
-			replyWorkspaceInfo(b, bindingKey)
-		}
-
-	case "bind":
-		if len(args) < 2 {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsBindUsage))
-			return
-		}
-		bindWorkspace(projectKey, args[1], MsgWsBindSuccess)
-
-	case "route":
-		if len(args) < 2 {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsRouteUsage))
-			return
-		}
-		routeWorkspace(projectKey, args[1:], MsgWsRouteUsage, MsgWsRouteSuccess)
-
-	case "init":
-		if len(args) < 2 {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsInitUsage))
-			return
-		}
-		initWorkspace(projectKey, args[1], MsgWsCloneSuccess)
-
-	case "shared":
-		sharedSubCmd := ""
-		if len(args) > 1 {
-			sharedSubCmd = matchSubCommand(args[1], []string{"init", "bind", "route", "unbind", "list"})
-		}
-		switch sharedSubCmd {
-		case "":
-			b := e.workspaceBindings.Lookup(sharedWorkspaceBindingsKey, channelKey)
-			if b == nil {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedNoBinding))
-			} else {
-				replyWorkspaceInfo(b, sharedWorkspaceBindingsKey)
-			}
-			return
-		case "bind":
-			if len(args) < 3 {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedUsage))
-				return
-			}
-			bindWorkspace(sharedWorkspaceBindingsKey, args[2], MsgWsSharedBindSuccess)
-			return
-		case "route":
-			if len(args) < 3 {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedUsage))
-				return
-			}
-			routeWorkspace(sharedWorkspaceBindingsKey, args[2:], MsgWsSharedUsage, MsgWsSharedRouteSuccess)
-			return
-		case "init":
-			if len(args) < 3 {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedUsage))
-				return
-			}
-			initWorkspace(sharedWorkspaceBindingsKey, args[2], MsgWsSharedBindSuccess)
-			return
-		case "unbind":
-			if e.workspaceBindings.Lookup(sharedWorkspaceBindingsKey, channelKey) == nil {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedNoBinding))
-				return
-			}
-			e.workspaceBindings.Unbind(sharedWorkspaceBindingsKey, channelKey)
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedUnbindSuccess))
-			return
-		case "list":
-			listBindings(sharedWorkspaceBindingsKey, MsgWsSharedListEmpty, MsgWsSharedListTitle)
-			return
-		default:
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedUsage))
-			return
-		}
-
-	case "unbind":
-		if e.workspaceBindings.Lookup(projectKey, channelKey) == nil {
-			if e.workspaceBindings.Lookup(sharedWorkspaceBindingsKey, channelKey) != nil {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsSharedOnlyHint))
-			} else {
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsNoBinding))
-			}
-			return
-		}
-		e.workspaceBindings.Unbind(projectKey, channelKey)
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsUnbindSuccess))
-
-	case "list":
-		listBindings(projectKey, MsgWsListEmpty, MsgWsListTitle)
-
-	default:
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsUsage))
-	}
-}
-
 func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
-	_, sessions, interactiveKey, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	_, sessions, interactiveKey := e.commandContext(p, msg)
 
 	slog.Info("cmdNew: cleaning up old session", "session_key", msg.SessionKey)
 	e.takeStagedAttachments(interactiveKey)
@@ -6499,11 +5995,7 @@ const listPageSize = 20
 const dirCardPageSize = 20
 
 func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 
 	if !supportsCards(p) {
 		agentSessions, err := agent.ListSessions(e.ctx)
@@ -6596,11 +6088,7 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 	query := strings.TrimSpace(strings.Join(args, " "))
 
 	slog.Info("cmdSwitch: listing agent sessions", "session_key", msg.SessionKey)
-	agent, sessions, interactiveKey, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, interactiveKey := e.commandContext(p, msg)
 	agentSessions, err := agent.ListSessions(e.ctx)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
@@ -6694,12 +6182,6 @@ func (e *Engine) commandWorkDir(agent Agent, msg *Message) string {
 	if switcher, ok := agent.(WorkDirSwitcher); ok {
 		if wd := strings.TrimSpace(switcher.GetWorkDir()); wd != "" {
 			return normalizeWorkspacePath(wd)
-		}
-	}
-	if e.multiWorkspace {
-		channelKey := effectiveWorkspaceChannelKey(msg)
-		if b, _, usable := e.lookupEffectiveWorkspaceBinding(channelKey); usable {
-			return normalizeWorkspacePath(b.Workspace)
 		}
 	}
 	if wd, ok := agent.(interface{ GetWorkDir() string }); ok {
@@ -7243,28 +6725,6 @@ func appendReplyFooter(content, footer string) string {
 	return content + "\n\n*" + footer + "*"
 }
 
-func appendFinalMetadataToSegment(segment, fullResponse string) string {
-	segment = strings.TrimRight(segment, "\n ")
-	if segment == "" {
-		return fullResponse
-	}
-	fullResponse = strings.TrimSpace(fullResponse)
-	if fullResponse == "" || strings.TrimSpace(segment) == fullResponse {
-		return segment
-	}
-
-	metadata := ""
-	if idx := strings.LastIndex(fullResponse, "\n\n*"); idx >= 0 && strings.HasSuffix(fullResponse, "*") {
-		metadata = fullResponse[idx:]
-	} else if match := ctxSelfReportRe.FindString(fullResponse); match != "" {
-		metadata = "\n" + strings.TrimSpace(match)
-	}
-	if metadata == "" || strings.Contains(segment, strings.TrimSpace(metadata)) {
-		return segment
-	}
-	return segment + metadata
-}
-
 func (e *Engine) cmdShow(p Platform, msg *Message, args []string) {
 	rawRef := strings.TrimSpace(strings.Join(args, " "))
 	if rawRef == "" {
@@ -7272,11 +6732,7 @@ func (e *Engine) cmdShow(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	agent, _, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, _, _ := e.commandContext(p, msg)
 	workDir := e.commandWorkDir(agent, msg)
 	req, err := buildReferenceViewRequest(rawRef, workDir)
 	if err != nil {
@@ -7588,11 +7044,7 @@ func (e *Engine) cmdShell(p Platform, msg *Message, raw string) {
 		}
 	}
 
-	agent, _, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, _, _ := e.commandContext(p, msg)
 	workDir := e.commandWorkDir(agent, msg)
 	if workDir == "" {
 		workDir, _ = os.Getwd()
@@ -7615,13 +7067,7 @@ func (e *Engine) cmdDiff(p Platform, msg *Message, raw string) {
 
 	// Resolve working directory (same pattern as cmdShell)
 	var workDir string
-	if e.multiWorkspace {
-		channelKey := effectiveWorkspaceChannelKey(msg)
-		if b, _, usable := e.lookupEffectiveWorkspaceBinding(channelKey); usable {
-			workDir = normalizeWorkspacePath(b.Workspace)
-		}
-	}
-	if workDir == "" {
+	{
 		if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
 			workDir = wd.GetWorkDir()
 		}
@@ -7739,9 +7185,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 				baseDir = absDir
 			}
 
-			if !e.multiWorkspace {
-				switcher.SetWorkDir(baseDir)
-			}
+			switcher.SetWorkDir(baseDir)
 			e.cleanupInteractiveState(interactiveKey)
 
 			s := sessions.GetOrCreateActive(sessionKey)
@@ -7750,11 +7194,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 			sessions.Save()
 
 			if e.projectState != nil {
-				if e.multiWorkspace {
-					e.projectState.ClearWorkspaceDirOverride(interactiveKey)
-				} else {
-					e.projectState.ClearWorkDirOverride()
-				}
+				e.projectState.ClearWorkDirOverride()
 				e.projectState.Save()
 			}
 			if e.dirHistory != nil {
@@ -7809,9 +7249,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 		return e.i18n.Tf(MsgDirInvalidPath, newDir), ""
 	}
 
-	if !e.multiWorkspace {
-		switcher.SetWorkDir(newDir)
-	}
+	switcher.SetWorkDir(newDir)
 	e.cleanupInteractiveState(interactiveKey)
 
 	s := sessions.GetOrCreateActive(sessionKey)
@@ -7823,11 +7261,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 		e.dirHistory.Add(e.name, newDir)
 	}
 	if e.projectState != nil {
-		if e.multiWorkspace {
-			e.projectState.SetWorkspaceDirOverride(interactiveKey, newDir)
-		} else {
-			e.projectState.SetWorkDirOverride(newDir)
-		}
+		e.projectState.SetWorkDirOverride(newDir)
 		e.projectState.Save()
 	}
 
@@ -7835,11 +7269,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 }
 
 func (e *Engine) cmdDir(p Platform, msg *Message, args []string) {
-	agent, sessions, interactiveKey, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, interactiveKey := e.commandContext(p, msg)
 	switcher, ok := agent.(WorkDirSwitcher)
 	if !ok {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgDirNotSupported))
@@ -7907,11 +7337,7 @@ func (e *Engine) cmdSearch(p Platform, msg *Message, args []string) {
 	keyword := strings.ToLower(strings.Join(args, " "))
 
 	// Get all agent sessions
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 	agentSessions, err := agent.ListSessions(e.ctx)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSearchError), err))
@@ -7990,11 +7416,7 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 
 	// Check if first arg is a number → naming a specific session by list index
 	var targetID string
@@ -8046,11 +7468,7 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 
 func (e *Engine) cmdCurrent(p Platform, msg *Message) {
 	if !supportsCards(p) {
-		agent, sessions, _, err := e.commandContext(p, msg)
-		if err != nil {
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-			return
-		}
+		agent, sessions, _ := e.commandContext(p, msg)
 		s := sessions.GetOrCreateActive(msg.SessionKey)
 		agentID := s.GetAgentSessionID()
 		if agentID == "" {
@@ -8098,16 +7516,6 @@ func selectUsageWindows(report *UsageReport) (*UsageWindow, *UsageWindow) {
 		}
 	}
 	return nil, nil
-}
-
-func splitCardTitleBody(content string) (string, string) {
-	content = strings.TrimSpace(content)
-	parts := strings.SplitN(content, "\n\n", 2)
-	title := strings.TrimSpace(parts[0])
-	if len(parts) == 1 {
-		return title, ""
-	}
-	return title, strings.TrimSpace(parts[1])
 }
 
 func (e *Engine) cardBackButton() CardButton {
@@ -8160,11 +7568,7 @@ func (e *Engine) cmdHistory(p Platform, msg *Message, args []string) {
 		args = []string{"10"}
 	}
 
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 	s := sessions.GetOrCreateActive(msg.SessionKey)
 	n := 10
 	if v, err := strconv.Atoi(args[0]); err == nil && v > 0 {
@@ -8302,7 +7706,6 @@ func helpCardGroups() []helpCardGroup {
 			key:      "system",
 			titleKey: MsgHelpSystemSection,
 			items: []helpCardItem{
-				{command: "/workspace", action: "cmd:/workspace"},
 				{command: "/dir", action: "nav:/dir"},
 				{command: "/restart", action: "cmd:/restart"},
 			},
@@ -8430,11 +7833,7 @@ func (e *Engine) GetAllCommands() []BotCommandInfo {
 }
 
 func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
-	agent, sessions, interactiveKey, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, interactiveKey := e.commandContext(p, msg)
 
 	switcher, ok := agent.(ModelSwitcher)
 	if !ok {
@@ -8516,12 +7915,11 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 		target = resolveModelSwitchTarget(target, models)
 	}
 
-	target, err = e.switchModelOnAgent(agent, target, agent == e.agent)
+	target, err := e.switchModelOnAgent(agent, target, agent == e.agent)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgModelChangeFailed, err))
 		return
 	}
-	e.persistWorkspaceModelOverride(interactiveKey, msg.SessionKey, agent, target)
 	e.cleanupInteractiveState(interactiveKey)
 
 	// Keep the existing agent session ID so the next StartSession uses
@@ -8645,11 +8043,7 @@ func (e *Engine) switchModelOnAgent(agent Agent, target string, persistConfig bo
 }
 
 func (e *Engine) cmdEffort(p Platform, msg *Message, args []string) {
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 
 	switcher, ok := agent.(ReasoningEffortSwitcher)
 	if !ok {
@@ -8730,11 +8124,7 @@ func (e *Engine) cmdEffort(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {
-	agent, _, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, _, _ := e.commandContext(p, msg)
 
 	switcher, ok := agent.(ModeSwitcher)
 	if !ok {
@@ -8931,11 +8321,7 @@ func (e *Engine) cmdStop(p Platform, msg *Message) {
 // Unlike /stop which only halts execution, /cancel also resets the session
 // so the user can immediately continue with new instructions.
 func (e *Engine) cmdCancel(p Platform, msg *Message) {
-	_, sessions, interactiveKey, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	_, sessions, interactiveKey := e.commandContext(p, msg)
 
 	slog.Info("cmdCancel: stopping execution and creating new session", "session_key", msg.SessionKey)
 
@@ -9056,11 +8442,7 @@ normalCleanup:
 }
 
 func (e *Engine) cmdCompact(p Platform, msg *Message) {
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 
 	compressor, ok := agent.(ContextCompressor)
 	if !ok || compressor.CompressCommand() == "" {
@@ -9283,11 +8665,7 @@ func (e *Engine) drainQueuedMessagesAfterCompress(state *interactiveState, sessi
 }
 
 func (e *Engine) cmdAllow(p Platform, msg *Message, args []string) {
-	agent, _, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, _, _ := e.commandContext(p, msg)
 
 	if len(args) == 0 {
 		if auth, ok := agent.(ToolAuthorizer); ok {
@@ -9316,11 +8694,7 @@ func (e *Engine) cmdAllow(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdProvider(p Platform, msg *Message, args []string) {
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 
 	switcher, ok := agent.(ProviderSwitcher)
 	if !ok {
@@ -9703,18 +9077,16 @@ func (e *Engine) getPendingProviderAdd(sessionKey string) *pendingProviderAddSta
 // SendToSession sends a message to an active session from an external caller (API/CLI).
 // If sessionKey is empty, it picks the first active session.
 func (e *Engine) SendToSession(sessionKey, message string) error {
-	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil, nil, false)
+	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil)
 }
 
 // SendOptions controls optional behavior for external send callers.
 type SendOptions struct {
 	WorkDir string
-	AtUsers []string
-	AtAll   bool
 }
 
-func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment, atUsers []string, atAll bool) error {
-	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{AtUsers: atUsers, AtAll: atAll})
+func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment) error {
+	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{})
 }
 
 func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []ImageAttachment, files []FileAttachment, opts SendOptions) error {
@@ -9724,7 +9096,7 @@ func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []I
 			return err
 		}
 		if useWorkDirSession {
-			return e.SendToSessionInWorkDir(sessionKey, message, images, files, workDir, opts.AtUsers, opts.AtAll)
+			return e.SendToSessionInWorkDir(sessionKey, message, images, files, workDir)
 		}
 	}
 
@@ -9762,21 +9134,8 @@ func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []I
 		if err := e.waitOutgoing(p); err != nil {
 			return err
 		}
-		// Use AtMentionSender when @users specified and platform supports it
-		if len(opts.AtUsers) > 0 || opts.AtAll {
-			if atSender, ok := p.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, replyCtx, message, opts.AtUsers, opts.AtAll); err != nil {
-					return err
-				}
-			} else {
-				if err := p.Send(e.ctx, replyCtx, message); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := p.Send(e.ctx, replyCtx, message); err != nil {
-				return err
-			}
+		if err := p.Send(e.ctx, replyCtx, message); err != nil {
+			return err
 		}
 		if state != nil {
 			state.mu.Lock()
@@ -9810,7 +9169,7 @@ type sendTarget struct {
 	sessionKey string
 }
 
-func (e *Engine) SendToSessionInWorkDir(sessionKey, message string, images []ImageAttachment, files []FileAttachment, workDir string, atUsers []string, atAll bool) error {
+func (e *Engine) SendToSessionInWorkDir(sessionKey, message string, images []ImageAttachment, files []FileAttachment, workDir string) error {
 	if message == "" && len(images) == 0 && len(files) == 0 {
 		return fmt.Errorf("message or attachment is required")
 	}
@@ -9859,18 +9218,8 @@ func (e *Engine) SendToSessionInWorkDir(sessionKey, message string, images []Ima
 		if err := e.waitOutgoing(target.platform); err != nil {
 			return err
 		}
-		if len(atUsers) > 0 || atAll {
-			if atSender, ok := target.platform.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, target.replyCtx, message, atUsers, atAll); err != nil {
-					return err
-				}
-			} else if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
-		} else {
-			if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
+		if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
+			return err
 		}
 		if target.state != nil {
 			target.state.mu.Lock()
@@ -9904,11 +9253,6 @@ func (e *Engine) resolveSendTarget(sessionKey string, attachments bool) (sendTar
 	var state *interactiveState
 	if sessionKey != "" {
 		state = e.interactiveStates[sessionKey]
-		if state == nil && e.multiWorkspace {
-			if iKey := e.interactiveKeyForSessionKeyLocked(sessionKey); iKey != sessionKey {
-				state = e.interactiveStates[iKey]
-			}
-		}
 	} else if len(e.interactiveStates) == 1 {
 		for key, s := range e.interactiveStates {
 			resolvedSessionKey = key
@@ -10187,13 +9531,6 @@ func (e *Engine) resolveOutboundSessionTarget(sessionKey string, hasAttachments 
 	var state *interactiveState
 	if sessionKey != "" {
 		state = e.interactiveStates[sessionKey]
-		if state == nil && e.multiWorkspace {
-			// We already hold interactiveMu, so call the *Locked variant
-			// to avoid a self-deadlock on the non-reentrant mutex.
-			if iKey := e.interactiveKeyForSessionKeyLocked(sessionKey); iKey != sessionKey {
-				state = e.interactiveStates[iKey]
-			}
-		}
 	} else if len(e.interactiveStates) == 1 {
 		// Single session: use it when no sessionKey is provided (backward compatible)
 		for _, s := range e.interactiveStates {
@@ -10801,7 +10138,6 @@ func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 	resolved, err := e.switchModelOnAgent(agent, target, agent == e.agent)
 	interactiveKey := e.interactiveKeyForSessionKey(sessionKey)
 	if err == nil {
-		e.persistWorkspaceModelOverride(interactiveKey, sessionKey, agent, resolved)
 	}
 	e.cleanupInteractiveState(interactiveKey)
 	if err == nil {
@@ -10809,41 +10145,6 @@ func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 	}
 
 	return e.renderModelSwitchResultCard(resolved, err)
-}
-
-func (e *Engine) persistWorkspaceModelOverride(interactiveKey, sessionKey string, agent Agent, model string) {
-	if e.projectState == nil || !e.multiWorkspace || model == "" {
-		return
-	}
-	if agent == e.agent {
-		return
-	}
-	workspace := workspaceModelOverrideKey(interactiveKey, sessionKey, agent)
-	if workspace == "" {
-		return
-	}
-	e.projectState.SetWorkspaceModelOverride(workspace, model)
-	e.projectState.Save()
-}
-
-func workspaceModelOverrideKey(interactiveKey, sessionKey string, agent Agent) string {
-	if wd, ok := agent.(interface{ GetWorkDir() string }); ok {
-		if dir := strings.TrimSpace(wd.GetWorkDir()); dir != "" {
-			return normalizeWorkspacePath(dir)
-		}
-	}
-	return workspaceFromInteractiveKey(interactiveKey, sessionKey)
-}
-
-func workspaceFromInteractiveKey(interactiveKey, sessionKey string) string {
-	if interactiveKey == "" || sessionKey == "" || interactiveKey == sessionKey {
-		return ""
-	}
-	suffix := ":" + sessionKey
-	if !strings.HasSuffix(interactiveKey, suffix) {
-		return ""
-	}
-	return strings.TrimSuffix(interactiveKey, suffix)
 }
 
 // executeCardAction performs the side-effect for act: prefixed actions
@@ -11300,8 +10601,6 @@ func (e *Engine) pushDeleteModeResultCard(sessionKey string) {
 func (e *Engine) performModelSwitchAsync(sessionKey string, state *interactiveState, agent Agent, sessions *SessionManager, target string) {
 	resolved, err := e.switchModelOnAgent(agent, target, agent == e.agent)
 	if err == nil {
-		interactiveKey := e.interactiveKeyForSessionKey(sessionKey)
-		e.persistWorkspaceModelOverride(interactiveKey, sessionKey, agent, resolved)
 		sessions.Save()
 	}
 
@@ -12129,11 +11428,7 @@ func (e *Engine) executeCustomCommand(p Platform, msg *Message, cmd *CustomComma
 	// custom command always runs against the global e.agent (with the
 	// project-level work_dir), bypassing any per-channel binding written by
 	// /workspace bind.
-	agent, sessions, interactiveKey, workspaceDir, err := e.commandContextWithWorkspace(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, interactiveKey, workspaceDir := e.commandContextWithWorkspace(p, msg)
 
 	session := sessions.GetOrCreateActive(interactiveKey)
 	if !session.TryLock() {
@@ -12342,41 +11637,6 @@ func (e *Engine) cmdCommandsDel(p Platform, msg *Message, args []string) {
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCommandsDeleted), name))
 }
 
-func displayCommandForPlatform(platformName, command string) string {
-	if !strings.EqualFold(platformName, "telegram") {
-		return command
-	}
-	if sanitized := sanitizeTelegramDisplayCommand(command); sanitized != "" {
-		return sanitized
-	}
-	return command
-}
-
-func sanitizeTelegramDisplayCommand(cmd string) string {
-	cmd = strings.ToLower(cmd)
-	var b strings.Builder
-	for _, c := range cmd {
-		switch {
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-			b.WriteRune(c)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	result := b.String()
-	for strings.Contains(result, "__") {
-		result = strings.ReplaceAll(result, "__", "_")
-	}
-	result = strings.Trim(result, "_")
-	if len(result) == 0 || result[0] < 'a' || result[0] > 'z' {
-		return ""
-	}
-	if len(result) > 32 {
-		result = result[:32]
-	}
-	return result
-}
-
 // ── /whoami command ─────────────────────────────────────────
 
 func (e *Engine) cmdWhoami(p Platform, msg *Message) {
@@ -12556,11 +11816,7 @@ func (e *Engine) cmdAliasDel(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdDelete(p Platform, msg *Message, args []string) {
-	agent, sessions, _, err := e.commandContext(p, msg)
-	if err != nil {
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
-		return
-	}
+	agent, sessions, _ := e.commandContext(p, msg)
 	deleter, ok := agent.(SessionDeleter)
 	if !ok {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgDeleteNotSupported))
@@ -12817,38 +12073,6 @@ func truncateIf(s string, maxLen int) string {
 	return string([]rune(s)[:maxLen]) + "..."
 }
 
-func splitMessage(text string, maxLen int) []string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-
-	for len(runes) > 0 {
-		if len(runes) <= maxLen {
-			chunks = append(chunks, string(runes))
-			break
-		}
-
-		end := maxLen
-
-		// Try to split at newline boundary within the rune window.
-		// Convert the candidate chunk back to a string for newline search.
-		candidate := string(runes[:end])
-		if idx := strings.LastIndex(candidate, "\n"); idx > 0 {
-			// idx is a byte offset within candidate; convert to rune offset.
-			runeIdx := utf8.RuneCountInString(candidate[:idx])
-			if runeIdx >= end/2 {
-				end = runeIdx + 1
-			}
-		}
-
-		chunks = append(chunks, string(runes[:end]))
-		runes = runes[end:]
-	}
-	return chunks
-}
-
 // sendTTSReply synthesizes fullResponse text and sends audio to the platform.
 // Called asynchronously after EventResult; text reply is always sent first.
 func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
@@ -12943,34 +12167,11 @@ func extractUserID(sessionKey string) string {
 	return ""
 }
 
-func stringSliceContains(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-	return false
-}
-
 func extractPlatformName(sessionKey string) string {
 	if i := strings.IndexByte(sessionKey, ':'); i >= 0 {
 		return sessionKey[:i]
 	}
 	return sessionKey
-}
-
-func workspaceChannelKey(platformName, channelID string) string {
-	if channelID == "" {
-		return ""
-	}
-	if platformName == "" {
-		return channelID
-	}
-	return platformName + ":" + channelID
-}
-
-func extractWorkspaceChannelKey(sessionKey string) string {
-	return workspaceChannelKey(extractPlatformName(sessionKey), extractChannelID(sessionKey))
 }
 
 // effectiveChannelID returns the channel identifier from a Message.
@@ -12983,96 +12184,21 @@ func effectiveChannelID(msg *Message) string {
 	return extractChannelID(msg.SessionKey)
 }
 
-// effectiveWorkspaceChannelKey returns the workspace binding key from a Message.
-func effectiveWorkspaceChannelKey(msg *Message) string {
-	if msg.ChannelKey != "" {
-		return workspaceChannelKey(msg.Platform, msg.ChannelKey)
-	}
-	return extractWorkspaceChannelKey(msg.SessionKey)
-}
-
-// migrateLegacyWorkspaceBindings moves bindings from a platform-provided
-// legacy channel scope to the current scope before workspace resolution. The
-// platform owns both opaque identifiers; core only adds the platform prefix.
-func (e *Engine) migrateLegacyWorkspaceBindings(msg *Message) {
-	if e.workspaceBindings == nil || msg == nil || msg.ChannelKey == "" || msg.LegacyChannelKey == "" {
-		return
-	}
-	oldChannelKey := workspaceChannelKey(msg.Platform, msg.LegacyChannelKey)
-	newChannelKey := workspaceChannelKey(msg.Platform, msg.ChannelKey)
-	if oldChannelKey == "" || newChannelKey == "" || oldChannelKey == newChannelKey {
-		return
-	}
-
-	for _, projectKey := range []string{"project:" + e.name, sharedWorkspaceBindingsKey} {
-		if e.workspaceBindings.MigrateChannelKey(projectKey, oldChannelKey, newChannelKey) {
-			slog.Info("workspace binding migrated",
-				"project", projectKey,
-				"old_channel_key", oldChannelKey,
-				"new_channel_key", newChannelKey)
-		}
-	}
-}
-
-// commandContext resolves the appropriate agent, session manager, and interactive key
-// for a command. In multi-workspace mode, it routes to the bound workspace if present.
-func (e *Engine) commandContext(p Platform, msg *Message) (Agent, *SessionManager, string, error) {
-	agent, sessions, interactiveKey, _, err := e.commandContextWithWorkspace(p, msg)
-	return agent, sessions, interactiveKey, err
+// commandContext resolves the agent, session manager, and interactive key for a command.
+func (e *Engine) commandContext(p Platform, msg *Message) (Agent, *SessionManager, string) {
+	return e.agent, e.sessions, msg.SessionKey
 }
 
 // commandContextWithWorkspace is like commandContext but additionally returns
-// the resolved workspace path for callers that need to forward it to
-// processInteractiveMessageWith (idle reaper bookkeeping, reply footer, etc).
-func (e *Engine) commandContextWithWorkspace(p Platform, msg *Message) (Agent, *SessionManager, string, string, error) {
-	if !e.multiWorkspace {
-		return e.agent, e.sessions, msg.SessionKey, "", nil
-	}
-	channelID := effectiveChannelID(msg)
-	channelKey := effectiveWorkspaceChannelKey(msg)
-	if channelKey == "" || channelID == "" {
-		return e.agent, e.sessions, msg.SessionKey, "", nil
-	}
-	workspace, _, err := e.resolveWorkspace(p, channelID)
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	if workspace == "" {
-		return e.agent, e.sessions, msg.SessionKey, "", nil
-	}
-	agent, sessions, interactiveKey, effectiveDir, err := e.workspaceContext(workspace, msg.SessionKey)
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	return agent, sessions, interactiveKey, effectiveDir, nil
+// the workspace path forwarded to processInteractiveMessageWith ("" here).
+func (e *Engine) commandContextWithWorkspace(p Platform, msg *Message) (Agent, *SessionManager, string, string) {
+	return e.agent, e.sessions, msg.SessionKey, ""
 }
 
 // sessionContextForKey resolves the agent and session manager for a sessionKey.
 // It uses existing workspace bindings and falls back to global context if unresolved.
 func (e *Engine) sessionContextForKey(sessionKey string) (Agent, *SessionManager) {
 	if workspace := e.sendWorkDirForSession(sessionKey); workspace != "" {
-		if wsAgent, wsSessions, err := e.getOrCreateWorkspaceAgent(workspace); err == nil {
-			return wsAgent, wsSessions
-		}
-	}
-	if !e.multiWorkspace || e.workspaceBindings == nil {
-		return e.agent, e.sessions
-	}
-	if channelKey := extractWorkspaceChannelKey(sessionKey); channelKey != "" {
-		if b, _, usable := e.lookupEffectiveWorkspaceBinding(channelKey); usable {
-			if wsAgent, wsSessions, err := e.getOrCreateWorkspaceAgent(normalizeWorkspacePath(b.Workspace)); err == nil {
-				return wsAgent, wsSessions
-			}
-		}
-	}
-	// Live-state fallback: when channel-derived binding misses (Discord
-	// thread_isolation case where binding is keyed by parent channel but
-	// sessionKey is the thread ID), recover the workspace from any live
-	// interactive state keyed as "<workspace>:<sessionKey>". Without this,
-	// callers would route to the global agent while interactiveKeyForSessionKey
-	// returns the workspace-prefixed key, allowing concurrent unlocked sends
-	// to the same agent session.
-	if workspace := e.workspaceFromLiveState(sessionKey); workspace != "" {
 		if wsAgent, wsSessions, err := e.getOrCreateWorkspaceAgent(workspace); err == nil {
 			return wsAgent, wsSessions
 		}
@@ -13128,80 +12254,11 @@ func directParticipantKeyForSession(sessionKey string) string {
 	return platformName + ":direct-user:" + strings.TrimSpace(parts[3])
 }
 
-// workspaceFromLiveState extracts the workspace path embedded in a live
-// interactive state key for sessionKey, or "" if no live state references
-// this sessionKey. Used as a recovery path when channel-binding-derived
-// workspace resolution misses.
-func (e *Engine) workspaceFromLiveState(sessionKey string) string {
-	if sessionKey == "" {
-		return ""
-	}
-	e.interactiveMu.Lock()
-	defer e.interactiveMu.Unlock()
-	suffix := ":" + sessionKey
-	for k := range e.interactiveStates {
-		if strings.HasSuffix(k, suffix) {
-			return strings.TrimSuffix(k, suffix)
-		}
-	}
-	return ""
-}
-
 // interactiveKeyForSessionKey returns the interactive state key for a sessionKey.
 // In multi-workspace mode, it prefixes with the bound workspace path when available.
 func (e *Engine) interactiveKeyForSessionKey(sessionKey string) string {
 	if workspace := e.sendWorkDirForSession(sessionKey); workspace != "" {
 		return workspace + ":" + sessionKey
-	}
-	// Single-workspace fast path: no scan, no binding lookup, no lock.
-	if !e.multiWorkspace || e.workspaceBindings == nil {
-		return sessionKey
-	}
-	e.interactiveMu.Lock()
-	defer e.interactiveMu.Unlock()
-	return e.interactiveKeyForSessionKeyLocked(sessionKey)
-}
-
-// interactiveKeyForSessionKeyLocked is the lock-free variant of
-// interactiveKeyForSessionKey. It assumes the caller already holds
-// e.interactiveMu (e.g. SendToSessionWithAttachments which scans
-// interactiveStates under the lock and then needs to resolve the
-// canonical key for a session).
-//
-// Resolution precedence:
-//
-//  1. Exact match — if state already exists under raw sessionKey, prefer it
-//     so a single-workspace placeholder isn't shadowed by a workspace-
-//     prefixed state created later.
-//  2. Channel-binding-derived — if the channel resolves to a workspace,
-//     return "<workspace>:<sessionKey>". This is deterministic even when
-//     multiple workspace-prefixed states for the same sessionKey coexist
-//     (e.g. a channel rebound to a new workspace while the old workspace's
-//     state hasn't been cleaned up yet) — the *current* binding wins, and
-//     any stale workspace state becomes unreachable through this lookup,
-//     which is exactly what we want.
-//  3. Live-state suffix scan — only fires when channel-binding lookup
-//     fails. This is the recovery path for Discord thread_isolation: the
-//     binding is keyed by the parent channel, but sessionKey is the thread
-//     ID, so step 2 misses. The state map was keyed correctly at processing
-//     time, so we recover the workspace prefix from there.
-func (e *Engine) interactiveKeyForSessionKeyLocked(sessionKey string) string {
-	if workspace := e.sendWorkDirForSession(sessionKey); workspace != "" {
-		return workspace + ":" + sessionKey
-	}
-	if !e.multiWorkspace || e.workspaceBindings == nil {
-		return sessionKey
-	}
-	if _, ok := e.interactiveStates[sessionKey]; ok {
-		return sessionKey
-	}
-	if channelKey := extractWorkspaceChannelKey(sessionKey); channelKey != "" {
-		if b, _, usable := e.lookupEffectiveWorkspaceBinding(channelKey); usable {
-			return normalizeWorkspacePath(b.Workspace) + ":" + sessionKey
-		}
-	}
-	if found := findInteractiveKeyInStatesLocked(e.interactiveStates, sessionKey); found != "" {
-		return found
 	}
 	return sessionKey
 }
@@ -13245,343 +12302,6 @@ func findInteractiveKeyInStatesLocked(states map[string]*interactiveState, sessi
 		}
 	}
 	return ""
-}
-
-// lookupEffectiveWorkspaceBinding returns the effective binding for a channel
-// plus whether the bound workspace is currently usable.
-func (e *Engine) lookupEffectiveWorkspaceBinding(channelKey string) (*WorkspaceBinding, string, bool) {
-	if !e.multiWorkspace || e.workspaceBindings == nil || channelKey == "" {
-		return nil, "", false
-	}
-
-	projectKey := "project:" + e.name
-	b, bindingKey := e.workspaceBindings.LookupEffective(projectKey, channelKey)
-	if b == nil {
-		return nil, "", false
-	}
-
-	// When run_as_user isolation is active, the workspace lives in the target
-	// user's space (typically under their HOME, set to mode 0700 by `sudo -i`).
-	// The supervisor process runs as a different user, so os.Stat here would
-	// hit EACCES on the target user's private path and we'd wrongly conclude
-	// the directory is "missing" — then Unbind() it, permanently dropping a
-	// perfectly valid binding. The agent that actually uses the workspace runs
-	// as the target user and can access it fine, so skip the supervisor-side
-	// existence check entirely under isolation and trust the binding.
-	if e.runAsUser() != "" {
-		return b, bindingKey, true
-	}
-
-	if _, err := os.Stat(b.Workspace); err != nil {
-		// Only a genuine "does not exist" justifies dropping the binding. A
-		// permission error (or any other transient stat failure) must NOT
-		// unbind: the directory may well exist but be inaccessible to the
-		// supervisor. Treating those as "missing" silently loses user bindings.
-		if !os.IsNotExist(err) {
-			slog.Warn("bound workspace stat failed; keeping binding (not treating as missing)",
-				"workspace", b.Workspace, "channel_key", channelKey, "binding_scope", bindingKey, "err", err)
-			return b, bindingKey, true
-		}
-		slog.Warn("bound workspace directory missing",
-			"workspace", b.Workspace, "channel_key", channelKey, "binding_scope", bindingKey)
-		if bindingKey != sharedWorkspaceBindingsKey {
-			e.workspaceBindings.Unbind(bindingKey, channelKey)
-		}
-		return b, bindingKey, false
-	}
-
-	return b, bindingKey, true
-}
-
-// runAsUser returns the configured run_as_user for the engine's agent, or ""
-// if OS-level user isolation is not active. Mirrors the capability probe used
-// when copying isolation settings to per-workspace agents (getOrCreateWorkspaceAgent).
-func (e *Engine) runAsUser() string {
-	if ma, ok := e.agent.(interface{ GetRunAsUser() string }); ok {
-		return ma.GetRunAsUser()
-	}
-	return ""
-}
-
-// resolveWorkspace resolves a channel to a workspace directory.
-// Returns (workspacePath, channelName, error).
-// If workspacePath is empty, the init flow should be triggered.
-func (e *Engine) resolveWorkspace(p Platform, channelID string) (string, string, error) {
-	channelKey := workspaceChannelKey(p.Name(), channelID)
-
-	// Step 1: Check existing binding
-	if b, _, usable := e.lookupEffectiveWorkspaceBinding(channelKey); b != nil {
-		if !usable {
-			return "", b.ChannelName, nil
-		}
-		return normalizeWorkspacePath(b.Workspace), b.ChannelName, nil
-	}
-
-	// Step 2: Resolve channel name for convention match
-	channelName := ""
-	if resolver, ok := p.(ChannelNameResolver); ok {
-		name, err := resolver.ResolveChannelName(channelID)
-		if err != nil {
-			slog.Warn("failed to resolve channel name", "channel", channelID, "err", err)
-		} else {
-			channelName = name
-		}
-	}
-
-	if channelName == "" {
-		return "", "", nil
-	}
-
-	// Step 3: Convention match — check if base_dir/<channel-name> exists
-	candidate := filepath.Join(e.baseDir, channelName)
-	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-		// Auto-bind
-		projectKey := "project:" + e.name
-		normalized := normalizeWorkspacePath(candidate)
-		e.workspaceBindings.Bind(projectKey, channelKey, channelName, normalized)
-		slog.Info("workspace auto-bound by convention",
-			"channel", channelName, "workspace", normalized)
-		return normalized, channelName, nil
-	}
-
-	return "", channelName, nil
-}
-
-// handleWorkspaceInitFlow manages the conversational workspace setup.
-// Returns true if the message was consumed by the init flow.
-func (e *Engine) handleWorkspaceInitFlow(p Platform, msg *Message, channelName string) bool {
-	channelKey := effectiveWorkspaceChannelKey(msg)
-
-	e.initFlowsMu.Lock()
-	flow, exists := e.initFlows[channelKey]
-	e.initFlowsMu.Unlock()
-
-	content := strings.TrimSpace(msg.Content)
-	looksLikeAllowedLocalDir := e.workspaceInitAllowLocalPaths && looksLikeLocalDir(content)
-
-	if !exists {
-		if strings.HasPrefix(content, "/") && !looksLikeAllowedLocalDir {
-			return false
-		}
-		if e.skipGit {
-			cloneTo := filepath.Join(e.baseDir, channelName)
-			flow = &workspaceInitFlow{
-				state:       "awaiting_confirm",
-				channelName: channelName,
-				cloneTo:     cloneTo,
-			}
-			e.initFlowsMu.Lock()
-			e.initFlows[channelKey] = flow
-			e.initFlowsMu.Unlock()
-			e.reply(p, msg.ReplyCtx, fmt.Sprintf("I'll mkdir `%s` and bind it to this channel. OK? (yes/no)", channelName))
-			return true
-		}
-		flow = &workspaceInitFlow{
-			state:       "awaiting_url",
-			channelName: channelName,
-		}
-		e.initFlowsMu.Lock()
-		e.initFlows[channelKey] = flow
-		e.initFlowsMu.Unlock()
-		// If the first message is already a path or URL, process it now;
-		// otherwise show the hint and wait for the next message.
-		if !looksLikeAllowedLocalDir && !looksLikeGitURL(content) {
-			hintKey := MsgWsNotFoundHintGitOnly
-			if e.workspaceInitAllowLocalPaths {
-				hintKey = MsgWsNotFoundHint
-			}
-			e.reply(p, msg.ReplyCtx, e.i18n.T(hintKey))
-			return true
-		}
-	}
-
-	// Slash commands always take priority over the init flow — let them
-	// pass through to handleCommand. Clean up the stale flow since the
-	// user is issuing explicit commands instead of following the clone guide.
-	if exists && strings.HasPrefix(content, "/") && !looksLikeAllowedLocalDir {
-		e.initFlowsMu.Lock()
-		delete(e.initFlows, channelKey)
-		e.initFlowsMu.Unlock()
-		return false
-	}
-
-	switch flow.state {
-	case "awaiting_url":
-		// Accept local directory paths: bind directly without cloning.
-		if looksLikeAllowedLocalDir {
-			dirPath, resolveErr := resolveLocalDirPath(content, e.baseDir)
-			if resolveErr != nil {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInitDirNotFound, content))
-				return true
-			}
-			info, err := os.Stat(dirPath)
-			if err != nil || !info.IsDir() {
-				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsInitDirNotFound, content))
-				return true
-			}
-			projectKey := "project:" + e.name
-			e.workspaceBindings.Bind(projectKey, channelKey, flow.channelName, normalizeWorkspacePath(dirPath))
-			e.initFlowsMu.Lock()
-			delete(e.initFlows, channelKey)
-			e.initFlowsMu.Unlock()
-			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsBindSuccess, dirPath))
-			return true
-		}
-		if !e.workspaceInitAllowLocalPaths && looksLikeLocalDir(content) && !looksLikeGitURL(content) {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsInitLocalPathsDisabled))
-			return true
-		}
-
-		if !looksLikeGitURL(content) {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgWsInitInvalidTarget))
-			return true
-		}
-		repoName := extractRepoName(content)
-		cloneTo := filepath.Join(e.baseDir, repoName)
-
-		e.initFlowsMu.Lock()
-		flow.repoURL = content
-		flow.cloneTo = cloneTo
-		flow.state = "awaiting_confirm"
-		e.initFlowsMu.Unlock()
-
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf(
-			"I'll clone `%s` to `%s` and bind it to this channel. OK? (yes/no)", content, cloneTo))
-		return true
-
-	case "awaiting_confirm":
-		lower := strings.ToLower(content)
-		if lower != "yes" && lower != "y" {
-			e.initFlowsMu.Lock()
-			delete(e.initFlows, channelKey)
-			e.initFlowsMu.Unlock()
-			e.reply(p, msg.ReplyCtx, "Cancelled. Send a repo URL anytime to try again.")
-			return true
-		}
-
-		var err error
-		var message string
-		if e.skipGit {
-			err = os.MkdirAll(flow.cloneTo, 0o755)
-			message = fmt.Sprintf("mkdir failed: %v", err)
-		} else {
-			e.reply(p, msg.ReplyCtx, fmt.Sprintf("Cloning `%s` to `%s`...", flow.repoURL, flow.cloneTo))
-			err = gitClone(flow.repoURL, flow.cloneTo)
-			message = fmt.Sprintf("Clone failed: %v\nSend a repo URL to try again.", err)
-		}
-		if err != nil {
-			e.initFlowsMu.Lock()
-			delete(e.initFlows, channelKey)
-			e.initFlowsMu.Unlock()
-			e.reply(p, msg.ReplyCtx, message)
-			return true
-		}
-
-		projectKey := "project:" + e.name
-		e.workspaceBindings.Bind(projectKey, channelKey, flow.channelName, normalizeWorkspacePath(flow.cloneTo))
-
-		e.initFlowsMu.Lock()
-		delete(e.initFlows, channelKey)
-		e.initFlowsMu.Unlock()
-
-		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsCloneSuccess, flow.cloneTo))
-		return true
-	}
-
-	return false
-}
-
-func looksLikeGitURL(s string) bool {
-	return strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://") ||
-		strings.HasPrefix(s, "git@") ||
-		strings.HasPrefix(s, "ssh://")
-}
-
-// resolveLocalDirPath resolves a user-provided directory path to an absolute
-// path, expanding ~/... and joining relative paths with baseDir. It rejects
-// paths that escape baseDir via ../ traversal.
-func resolveLocalDirPath(target, baseDir string) (string, error) {
-	dirPath := target
-	if dirPath == "~" || strings.HasPrefix(dirPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("cannot resolve home directory: %w", err)
-		}
-		dirPath = filepath.Join(home, dirPath[2:])
-	} else if !filepath.IsAbs(dirPath) {
-		dirPath = filepath.Join(baseDir, dirPath)
-	}
-	cleaned := filepath.Clean(dirPath)
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err != nil {
-		resolved = cleaned
-	}
-	if baseDir != "" && !filepath.IsAbs(target) && !strings.HasPrefix(target, "~") {
-		cleanBase := filepath.Clean(baseDir)
-		if evalBase, err := filepath.EvalSymlinks(cleanBase); err == nil {
-			cleanBase = evalBase
-		}
-		if !strings.HasPrefix(resolved, cleanBase+string(filepath.Separator)) && resolved != cleanBase {
-			return "", fmt.Errorf("path escapes workspace base directory")
-		}
-	}
-	return resolved, nil
-}
-
-// looksLikeLocalDir returns true if the string looks like a local directory
-// path (absolute path, home-relative, dot-relative, or a bare name that
-// doesn't look like a URL). Slash commands like /dir are not local dirs.
-func looksLikeLocalDir(s string) bool {
-	if s == "" {
-		return false
-	}
-	if strings.Contains(s, "://") || strings.Contains(s, "@") {
-		return false
-	}
-	if strings.HasPrefix(s, "~/") || s == "~" || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
-		return true
-	}
-	// A single /word could be a slash command or an absolute path like /root.
-	// Check against known commands; if it matches, it's not a local dir.
-	if strings.HasPrefix(s, "/") {
-		name := strings.ToLower(strings.SplitN(s[1:], " ", 2)[0])
-		for _, c := range builtinCommands {
-			for _, n := range c.names {
-				if name == n {
-					return false
-				}
-			}
-		}
-	}
-	return true
-}
-
-func extractRepoName(url string) string {
-	url = strings.TrimSuffix(url, ".git")
-	// Handle git@host:org/repo format
-	if idx := strings.LastIndex(url, ":"); idx != -1 && strings.HasPrefix(url, "git@") {
-		remainder := url[idx+1:]
-		parts := strings.Split(remainder, "/")
-		if len(parts) > 0 {
-			return parts[len(parts)-1]
-		}
-	}
-	// Handle https://host/org/repo format
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return "workspace"
-}
-
-func gitClone(repoURL, dest string) error {
-	cmd := exec.Command("git", "clone", repoURL, dest)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
 }
 
 // ── Context usage indicator ──────────────────────────────────

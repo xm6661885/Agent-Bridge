@@ -55,8 +55,8 @@ type Agent struct {
 
 	appendSystemPrompt string // Custom text appended to the system prompt (keeps Claude's default)
 
-	providerProxy  *core.ProviderProxy // local proxy for third-party providers
-	proxyLocalURL  string              // local URL of the proxy
+	providerProxy *core.ProviderProxy // local proxy for third-party providers
+	proxyLocalURL string              // local URL of the proxy
 
 	// ccDataDir is injected by the agent-bridge host (see buildAgentOptions
 	// in cmd/agent-bridge/main.go). It locates the global directory where
@@ -66,10 +66,6 @@ type Agent struct {
 	// startup and shared across all sessions that don't need per-spawn
 	// customisation. Empty value falls back to os.TempDir.
 	ccDataDir string
-
-	// spawnOpts controls OS-user isolation via run_as_user. Zero value
-	// means legacy spawn as the supervisor user. See core/runas.go.
-	spawnOpts core.SpawnOptions
 
 	mu sync.RWMutex
 }
@@ -198,27 +194,8 @@ func New(opts map[string]any) (core.Agent, error) {
 	routerURL, _ := opts["router_url"].(string)
 	routerAPIKey, _ := opts["router_api_key"].(string)
 
-	// run_as_user: optional OS-user isolation. Injected into opts from
-	// the project-level config field by cmd/agent-bridge/main.go.
-	spawnOpts := core.SpawnOptions{}
-	spawnOpts.RunAsUser, _ = opts["run_as_user"].(string)
-	if env, ok := opts["run_as_env"].([]any); ok {
-		for _, v := range env {
-			if s, ok := v.(string); ok {
-				spawnOpts.EnvAllowlist = append(spawnOpts.EnvAllowlist, s)
-			}
-		}
-	} else if env, ok := opts["run_as_env"].([]string); ok {
-		spawnOpts.EnvAllowlist = append(spawnOpts.EnvAllowlist, env...)
-	}
-
-	// When run_as_user is set, the target user's PATH is what matters;
-	// skip the supervisor-side LookPath check and let spawn fail loudly
-	// at runtime if the target doesn't have claude installed.
-	if !spawnOpts.IsolationMode() {
-		if _, err := exec.LookPath(cmd); err != nil {
-			return nil, fmt.Errorf("claudecode: %q CLI not found in PATH, please install it first", cmd)
-		}
+	if _, err := exec.LookPath(cmd); err != nil {
+		return nil, fmt.Errorf("claudecode: %q CLI not found in PATH, please install it first", cmd)
 	}
 
 	// Parse project-level env from opts["env"] (set via [projects.agent.options.env] in config.toml).
@@ -253,7 +230,6 @@ func New(opts map[string]any) (core.Agent, error) {
 		activeIdx:        -1,
 		routerURL:        routerURL,
 		routerAPIKey:     routerAPIKey,
-		spawnOpts:        spawnOpts,
 		ccDataDir:        ccDataDir,
 
 		appendSystemPrompt: appendSystemPrompt,
@@ -511,7 +487,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	disableVerbose := a.routerURL != ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir)
+	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, disableVerbose, maxTok, a.ccDataDir)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {
@@ -783,39 +759,6 @@ func (a *Agent) GetMode() string {
 	return a.mode
 }
 
-// GetRunAsUser returns the target user for OS-isolation spawning, or ""
-// if no isolation is configured. Set at construction from the project-level
-// run_as_user field (injected into opts by cmd/agent-bridge/main.go).
-//
-// This accessor exists specifically so multi-workspace mode can propagate
-// run_as_user from the parent (project-level) agent into per-workspace
-// agent instances created lazily by core.Engine.getOrCreateWorkspaceAgent.
-// Without this, workspace agents are constructed with a fresh opts map
-// that never contained run_as_user, silently dropping back to the legacy
-// supervisor-user spawn path — which is exactly the leak agent-bridge#496
-// is designed to prevent.
-func (a *Agent) GetRunAsUser() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.spawnOpts.RunAsUser
-}
-
-// GetRunAsEnv returns the user-configured env allowlist extension (the
-// run_as_env project field), which is merged with core.DefaultEnvAllowlist
-// at spawn time. Returns nil if no extension is configured.
-//
-// Used by the multi-workspace propagation path alongside GetRunAsUser.
-func (a *Agent) GetRunAsEnv() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(a.spawnOpts.EnvAllowlist) == 0 {
-		return nil
-	}
-	out := make([]string, len(a.spawnOpts.EnvAllowlist))
-	copy(out, a.spawnOpts.EnvAllowlist)
-	return out
-}
-
 // WorkspaceAgentOptions returns a snapshot of user-configured options that
 // must propagate to per-workspace agent instances created lazily by
 // core.Engine.getOrCreateWorkspaceAgent. Without this snapshot, the engine
@@ -829,9 +772,6 @@ func (a *Agent) GetRunAsEnv() []string {
 //
 // configEnv IS included because it comes from the static config file and must
 // propagate to every workspace agent. sessionEnv is excluded (runtime-only).
-//
-// run_as_user / run_as_env are also omitted because the engine has its own
-// dedicated propagation path via GetRunAsUser/GetRunAsEnv (see agent-bridge#496).
 func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -988,7 +928,6 @@ func claudeConfigHomeDir() string {
 	}
 	return filepath.Join(home, ".claude")
 }
-
 
 // ── ProviderSwitcher implementation ──────────────────────────
 

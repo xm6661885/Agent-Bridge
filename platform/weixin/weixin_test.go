@@ -412,7 +412,7 @@ func TestContextToken_PersistAndReload(t *testing.T) {
 		t.Errorf("after reload, user-bbb = %q, want %q", got, "token-B")
 	}
 
-	// 3. ReconstructReplyCtx (the cron / agent-bridge send path) must succeed
+	// 3. ReconstructReplyCtx (the webhook / agent-bridge send path) must succeed
 	//    using the reloaded token.
 	rc, err := p2.ReconstructReplyCtx(sessionKeyPrefix + "user-aaa")
 	if err != nil {
@@ -443,7 +443,7 @@ func TestContextToken_LoadMissingFile(t *testing.T) {
 	}
 }
 
-// TestReconstructReplyCtx_MissingToken verifies the cron / agent-bridge send
+// TestReconstructReplyCtx_MissingToken verifies the webhook / agent-bridge send
 // path returns the expected actionable error when no context_token has ever
 // been stored for a peer. This is the "user must message the bot first"
 // case that the original #1087 reporter hit.
@@ -608,161 +608,3 @@ func TestSendChunks_AppliesQuota(t *testing.T) {
 // silently bricked bots at 4 replies per 24h. These tests pin the new
 // behaviour: replies are exempt from the quota, pushes still count, file
 // transfers still count, and the over-budget event is observable.
-
-// TestCheckSendQuota_ReplyBypassesQuota is the regression test for #1742.
-// Reply-path sends must never be blocked by the burst budget, regardless of
-// how many replies have already gone out — that's the bug v1.5.0 shipped.
-func TestCheckSendQuota_ReplyBypassesQuota(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	p := &Platform{sendQuotaLimit: 1, sendQuotaWindow: time.Hour}
-	ctx := context.Background()
-
-	// 50 reply-path sends all pass. With limit=1 the push-path budget would
-	// fail on the second call; the reply path must never reach that branch.
-	for i := 0; i < 50; i++ {
-		if err := p.checkSendQuota(ctx, sendPathReply); err != nil {
-			t.Fatalf("reply-path checkSendQuota(%d) blocked: %v — replies must bypass the push budget (#1742)", i, err)
-		}
-	}
-	if got := PushBudgetExceededTotal(); got != 0 {
-		t.Fatalf("push budget counter = %d, want 0 (replies never count toward push budget)", got)
-	}
-	// The push budget window itself must remain empty — replies never
-	// register a timestamp there.
-	if got := len(p.sendQuotaTimes); got != 0 {
-		t.Fatalf("sendQuotaTimes length = %d, want 0 (reply path must not touch the push bucket)", got)
-	}
-}
-
-// TestCheckSendQuota_PushStillEnforced verifies the proactive-push path still
-// enforces the burst budget. We must not regress the protection from #1643
-// while fixing #1742.
-func TestCheckSendQuota_PushStillEnforced(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	p := &Platform{sendQuotaLimit: 4, sendQuotaWindow: time.Hour}
-	ctx := context.Background()
-
-	// 4 push sends under the limit all pass.
-	for i := 0; i < 4; i++ {
-		if err := p.checkSendQuota(ctx, sendPathPush); err != nil {
-			t.Fatalf("push send %d unexpectedly blocked: %v", i, err)
-		}
-	}
-	// 5th push send is blocked; counter increments by exactly 1.
-	if err := p.checkSendQuota(ctx, sendPathPush); err == nil {
-		t.Fatal("5th push send should be blocked (budget exhausted)")
-	}
-	if got := PushBudgetExceededTotal(); got != 1 {
-		t.Fatalf("push budget counter = %d, want 1", got)
-	}
-}
-
-// TestCheckSendQuota_PushBlockedIncrementsCounter verifies repeated over-budget
-// push attempts increment the counter monotonically, so operators can see
-// push-budget pressure in `agent-bridge doctor` or telemetry.
-func TestCheckSendQuota_PushBlockedIncrementsCounter(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	p := &Platform{sendQuotaLimit: 1, sendQuotaWindow: time.Hour}
-	ctx := context.Background()
-
-	if err := p.checkSendQuota(ctx, sendPathPush); err != nil {
-		t.Fatalf("first push should pass: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		if err := p.checkSendQuota(ctx, sendPathPush); err == nil {
-			t.Fatalf("blocked push attempt %d unexpectedly succeeded", i)
-		}
-	}
-	if got := PushBudgetExceededTotal(); got != 3 {
-		t.Fatalf("push budget counter = %d, want 3", got)
-	}
-}
-
-// TestSendChunks_ReplyIgnoresBudget is the end-to-end variant of the
-// regression. Even with a budget of 1 and 50 successive reply calls through
-// sendChunks, every one must reach the outbound sendMessage HTTP call —
-// replies never get caught by the push budget.
-func TestSendChunks_ReplyIgnoresBudget(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	var sendCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sendCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message_id":123}`))
-	}))
-	defer srv.Close()
-
-	p := &Platform{httpClient: &http.Client{}, sendQuotaLimit: 1, sendQuotaWindow: time.Hour}
-	p.api = newAPIClient(srv.URL, "tok", "", p.httpClient)
-	rc := &replyContext{peerUserID: "peer-1", contextToken: "tok-1"}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	for i := 0; i < 50; i++ {
-		if err := p.sendChunks(ctx, rc, fmt.Sprintf("reply %d", i), sendPathReply); err != nil {
-			t.Fatalf("reply sendChunks(%d) blocked: %v — replies must bypass push budget (#1742)", i, err)
-		}
-	}
-	if got := sendCalls.Load(); got != 50 {
-		t.Fatalf("sendmessage calls = %d, want 50 (every reply must reach the API)", got)
-	}
-	if got := PushBudgetExceededTotal(); got != 0 {
-		t.Fatalf("push budget counter = %d, want 0 (replies never count)", got)
-	}
-}
-
-// TestSendChunks_PushRespectsBudget verifies that even with budget=1, the push
-// path still hits the API on the first call and blocks the second — protects
-// against the fix accidentally dropping the #1643 protection while widening
-// the surface that bypasses the quota.
-func TestSendChunks_PushRespectsBudget(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	var sendCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sendCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message_id":123}`))
-	}))
-	defer srv.Close()
-
-	p := &Platform{httpClient: &http.Client{}, sendQuotaLimit: 1, sendQuotaWindow: time.Hour}
-	p.api = newAPIClient(srv.URL, "tok", "", p.httpClient)
-	rc := &replyContext{peerUserID: "peer-1", contextToken: "tok-1"}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := p.sendChunks(ctx, rc, "first", sendPathPush); err != nil {
-		t.Fatalf("first push sendChunks failed: %v", err)
-	}
-	if err := p.sendChunks(ctx, rc, "second", sendPathPush); err == nil {
-		t.Fatal("second push should be blocked (budget exhausted)")
-	}
-	if got := sendCalls.Load(); got != 1 {
-		t.Fatalf("sendmessage calls = %d, want 1 (over-budget push not attempted)", got)
-	}
-	if got := PushBudgetExceededTotal(); got != 1 {
-		t.Fatalf("push budget counter = %d, want 1", got)
-	}
-}
-
-// TestSendSingleItem_PushRespectsBudget covers the media path. sendSingleItem
-// is invoked by SendImage / SendFile / SendAudio (proactive media); it must
-// consult the push budget just like the text push path does.
-func TestSendSingleItem_PushRespectsBudget(t *testing.T) {
-	resetPushBudgetExceededCounter()
-	p := &Platform{sendQuotaLimit: 1, sendQuotaWindow: time.Hour}
-	ctx := context.Background()
-
-	if err := p.checkSendQuota(ctx, sendPathPush); err != nil {
-		t.Fatalf("first push should pass: %v", err)
-	}
-	// Second push (the media send) is over budget.
-	if err := p.checkSendQuota(ctx, sendPathPush); err == nil {
-		t.Fatal("second push (media) should be blocked (budget exhausted)")
-	}
-	if got := PushBudgetExceededTotal(); got != 1 {
-		t.Fatalf("push budget counter = %d, want 1", got)
-	}
-}

@@ -18,7 +18,7 @@ Agent-Bridge 把本地 AI 编程 Agent（**Claude Code**、**Codex**）连接到
 - **Provider**：按项目管理 API Provider（CLI、聊天、管理页面）。
 - **管理页面**：内置 Web 管理界面，支持 WebSocket 实时聊天。
 - **守护进程**：可安装为 systemd / launchd / Windows 计划任务服务。
-- **外部自动化**：通过 webhook 或 `agent-bridge send` 触发消息。
+- **外部自动化**：通过 webhook 触发 Agent 回合；用 `agent-bridge send` 发送文件和媒体。
 - **不注入提示词**：不会向 Agent 会话注入任何桥接或平台提示词。
 
 ## 与 cc-connect 的区别
@@ -30,8 +30,10 @@ Agent-Bridge 把本地 AI 编程 Agent（**Claude Code**、**Codex**）连接到
 - 优化提示文案，去除 emoji。
 - QQ 支持群聊白名单（`allow_groups`）和群内仅被 @ 时回复。
 - 其他若干 bug 修复。
-- 删除内置 cron、timer、Agent heartbeat；定时任务请用外部调度器调用 webhook 或 `agent-bridge send`。
+- 删除内置 cron、timer、Agent heartbeat；定时任务请用外部调度器调用 webhook。
 - 删除多机器人中继、`/bind` 与 `relay send`。
+- 删除多工作区模式（`/workspace`）与 OS 用户隔离（`run_as_user`、`doctor user-isolation`）。
+- `agent-bridge send` 只发送附件与 TTS 语音；`-m` 仅作为 `--image`/`--file` 的附带文字，不能单独发送纯文字。
 - 不注入任何提示词，项目说明写在 `CLAUDE.md` / `AGENTS.md`。Claude Code 只透传你显式配置的 `system_prompt` / `append_system_prompt`。
 - 界面与消息仅英文，删除语言设置、自动检测与 `/lang`。
 - 删除检查更新与 `/upgrade`，以及 `/status`、`/usage`、`/version`、`/config`、`/memory`、`/doctor`、`/web`、`/ps`（`/btw`）。
@@ -131,7 +133,6 @@ allow_from = "*"
 | `/provider` | 查看或切换 Provider |
 | `/quiet` | 开关进度消息 |
 | `/dir`（`/cd`） | 切换工作目录 |
-| `/workspace`（`/ws`） | 管理工作区 |
 | `/shell`（`/sh`、`/run`） | 执行 shell 命令 |
 | `/diff` | 查看工作区 diff |
 | `/show` | 查看文件 |
@@ -177,7 +178,7 @@ token = "${AGENT_BRIDGE_ADMIN_TOKEN}"   # 必填
 ```text
 agent-bridge [--config path] [--force]
 agent-bridge daemon install|uninstall|start|stop|restart|status|logs [-f] [-n N]
-agent-bridge send -m "text" | --stdin  [-p project] [-s session]
+agent-bridge send --image|--file|--audio|--video <path> | --tts <text>  [-m caption] [-p project] [-s session]
 agent-bridge sessions list | show <id> [-n N]
 agent-bridge agent-sid
 agent-bridge provider add|list|remove --project <name> ...
@@ -188,13 +189,7 @@ agent-bridge config example|format|path
 
 ## 定时任务
 
-没有内置调度器，请使用 cron、systemd timer 等：
-
-```cron
-0 9 * * * agent-bridge send -p my-project -m "Summarize yesterday's commits"
-```
-
-或启用 `[webhook]`，由外部系统调用。
+没有内置调度器。请启用 `[webhook]`，由 cron、systemd timer 或其他外部系统调用；生成的文件可用 `agent-bridge send --file <path>` 发送。
 
 ## 目录结构
 

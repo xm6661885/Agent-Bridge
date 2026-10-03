@@ -34,29 +34,6 @@ func MergeEnv(base, extra []string) []string {
 	return append(merged, extra...)
 }
 
-// InjectedAgentEnv returns the env vars agent-bridge injects into a spawned
-// agent process so in-process extensions can learn agent-bridge's runtime state.
-// The AGENT_BRIDGE_ prefix marks these vars as agent-bridge's public extension contract,
-// alongside AGENT_BRIDGE_PROJECT / AGENT_BRIDGE_SESSION_KEY / AGENT_BRIDGE_DATA_DIR that the engine injects
-// as session env.
-//
-// Currently only the permission mode is exposed:
-//
-//	AGENT_BRIDGE_PERMISSION_MODE — the session's permission mode ("default" | "yolo").
-//	    Extensions such as the pi permission-gate read it to auto-approve tool
-//	    calls in yolo mode. An empty mode returns nil, so non-yolo sessions see
-//	    no injected var.
-//
-// Kept as a single core helper so every agent opts into the same convention
-// instead of hardcoding the variable name; extending the contract (e.g.
-// AGENT_BRIDGE_MODEL, AGENT_BRIDGE_THINKING) only means extending this function.
-func InjectedAgentEnv(mode string) []string {
-	if mode == "" {
-		return nil
-	}
-	return []string{"AGENT_BRIDGE_PERMISSION_MODE=" + mode}
-}
-
 // CheckAllowFrom logs a security warning at startup when allow_from is not
 // configured (defaults to permit-all). Platforms should call this during init.
 func CheckAllowFrom(platform, allowFrom string) {
@@ -65,15 +42,6 @@ func CheckAllowFrom(platform, allowFrom string) {
 			"Set allow_from in config to restrict access.",
 			"platform", platform)
 	}
-}
-
-// RedactToken replaces a secret token in text with [REDACTED] to prevent
-// token leakage in logs or error messages.
-func RedactToken(text, token string) string {
-	if token == "" || text == "" {
-		return text
-	}
-	return strings.ReplaceAll(text, token, "[REDACTED]")
 }
 
 // AllowList checks whether a user ID is permitted based on a comma-separated
@@ -436,14 +404,10 @@ type Message struct {
 	Location     *LocationAttachment // geographical location (if any)
 	ExtraContent string              // platform-enriched content (e.g. location text, reply quote) prepended for the agent
 	OnAccepted   func()              // called once when the engine accepts this message for an agent turn
-	ChannelKey   string              // platform-provided channel identifier for workspace binding (optional)
-	// LegacyChannelKey is the platform-provided channel identifier used by an
-	// older workspace-binding scope. When both keys are set, multi-workspace
-	// routing atomically migrates the legacy binding to ChannelKey.
-	LegacyChannelKey string
-	ReplyCtx         any    // platform-specific context needed for replying
-	FromVoice        bool   // true if message originated from voice transcription
-	ModeOverride     string // if set, temporarily override agent permission mode for this message
+	ChannelKey   string              // platform-provided channel identifier, e.g. chat:topic (optional)
+	ReplyCtx     any                 // platform-specific context needed for replying
+	FromVoice    bool                // true if message originated from voice transcription
+	ModeOverride string              // if set, temporarily override agent permission mode for this message
 	// IsPermissionResponse is set by inline-button / card-action paths in
 	// platforms when a synthesized message is forwarded as a permission
 	// decision (e.g. Telegram handleCallbackQuery for perm:allow/deny,

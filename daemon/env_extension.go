@@ -23,28 +23,6 @@ var (
 	envDiscoverers   []EnvDiscoverer
 )
 
-// RegisterEnvDiscoverer adds d to the list of install-time env-var
-// discoverers. Typically called from an init() in a plugin file.
-// Passing nil is a no-op.
-//
-// Discoverers run in registration order during Resolve(); later
-// discoverers override earlier ones for keys that collide (map merge).
-func RegisterEnvDiscoverer(d EnvDiscoverer) {
-	if d == nil {
-		return
-	}
-	envDiscoverersMu.Lock()
-	defer envDiscoverersMu.Unlock()
-	envDiscoverers = append(envDiscoverers, d)
-}
-
-// ResetEnvDiscoverers clears the registry. Intended for tests only.
-func ResetEnvDiscoverers() {
-	envDiscoverersMu.Lock()
-	defer envDiscoverersMu.Unlock()
-	envDiscoverers = nil
-}
-
 func snapshotEnvDiscoverers() []EnvDiscoverer {
 	envDiscoverersMu.RLock()
 	defer envDiscoverersMu.RUnlock()

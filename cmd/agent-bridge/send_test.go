@@ -80,7 +80,11 @@ func TestParseSendArgs_UsesSessionEnvFallback(t *testing.T) {
 func TestParseSendArgs_WorkDirOption(t *testing.T) {
 	workDir := t.TempDir()
 
-	req, _, err := parseSendArgs([]string{"--cwd", workDir, "--message", "please check"})
+	img := filepath.Join(workDir, "a.png")
+	if err := os.WriteFile(img, []byte("\x89PNG\r\n\x1a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req, _, err := parseSendArgs([]string{"--cwd", workDir, "--message", "please check", "--image", img})
 	if err != nil {
 		t.Fatalf("parseSendArgs returned error: %v", err)
 	}
@@ -88,7 +92,7 @@ func TestParseSendArgs_WorkDirOption(t *testing.T) {
 		t.Fatalf("WorkDir = %q, want %q", got, workDir)
 	}
 
-	req, _, err = parseSendArgs([]string{"--work-dir", workDir, "please check"})
+	req, _, err = parseSendArgs([]string{"--work-dir", workDir, "--image", img})
 	if err != nil {
 		t.Fatalf("parseSendArgs returned error for --work-dir: %v", err)
 	}
@@ -311,40 +315,11 @@ func TestResolveMaxAttachmentSize(t *testing.T) {
 	}
 }
 
-func TestBuildSendPayload_JSONRoundTrip(t *testing.T) {
-	req := core.SendRequest{
-		Project:    "demo",
-		SessionKey: "telegram:1:2",
-		Message:    "done",
-		TTSText:    "voice done",
-		Images: []core.ImageAttachment{{
-			MimeType: "image/png",
-			Data:     []byte("img"),
-			FileName: "a.png",
-		}},
-		Files: []core.FileAttachment{{
-			MimeType: "text/plain",
-			Data:     []byte("doc"),
-			FileName: "a.txt",
-		}},
+func TestParseSendArgs_RejectsTextOnly(t *testing.T) {
+	if _, _, err := parseSendArgs([]string{"-m", "hello"}); err == nil {
+		t.Fatal("expected text-only send to be rejected")
 	}
-
-	body, err := buildSendPayload(req)
-	if err != nil {
-		t.Fatalf("buildSendPayload returned error: %v", err)
-	}
-
-	var decoded core.SendRequest
-	if err := decodeSendPayload(body, &decoded); err != nil {
-		t.Fatalf("decodeSendPayload returned error: %v", err)
-	}
-	if len(decoded.Images) != 1 || string(decoded.Images[0].Data) != "img" {
-		t.Fatalf("decoded images = %#v", decoded.Images)
-	}
-	if decoded.TTSText != "voice done" {
-		t.Fatalf("decoded tts_text = %q", decoded.TTSText)
-	}
-	if len(decoded.Files) != 1 || string(decoded.Files[0].Data) != "doc" {
-		t.Fatalf("decoded files = %#v", decoded.Files)
+	if _, _, err := parseSendArgs([]string{"hello"}); err == nil {
+		t.Fatal("expected positional text to be rejected")
 	}
 }

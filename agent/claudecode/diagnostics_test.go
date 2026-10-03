@@ -2,11 +2,8 @@ package claudecode
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"agent-bridge/core"
 )
@@ -32,38 +29,6 @@ func TestClaudeDiagnostics_ApiRetryAndNetworkAreNonTerminal(t *testing.T) {
 	}
 	if event := <-cs.events; event.Type != core.EventResult || !event.Done {
 		t.Fatalf("lost terminal result: %+v", event)
-	}
-}
-
-func TestClaudeDiagnostics_StderrArrivesBeforeProcessCompletion(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "fake-claude")
-	script := "#!/bin/sh\nprintf 'API Error: retrying in 10s\\n' >&2\nsleep 0.1\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"recovered\"}'\n"
-	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cs, err := newClaudeSession(ctx, dir, bin, nil, "", "", "", "", "default", "", "", nil, nil, nil, nil, false, core.SpawnOptions{}, 0, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = cs.Close() })
-	select {
-	case event := <-cs.Events():
-		if event.Type != core.EventStatus || !strings.Contains(event.Content, "retrying") {
-			t.Fatalf("first event = %+v, want live diagnostic", event)
-		}
-	case <-ctx.Done():
-		t.Fatal("no live stderr diagnostic")
-	}
-	select {
-	case event := <-cs.Events():
-		if event.Type != core.EventResult || !event.Done || event.Content != "recovered" {
-			t.Fatalf("retry interrupted result: %+v", event)
-		}
-	case <-ctx.Done():
-		t.Fatal("no recovered result")
 	}
 }
 

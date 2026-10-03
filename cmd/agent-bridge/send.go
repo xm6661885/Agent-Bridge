@@ -63,7 +63,7 @@ func runSend(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("Message sent successfully.")
+	fmt.Println("Sent successfully.")
 }
 
 var errSendUsage = errors.New("show send usage")
@@ -71,12 +71,10 @@ var errSendUsage = errors.New("show send usage")
 func parseSendArgs(args []string) (core.SendRequest, string, error) {
 	var req core.SendRequest
 	var dataDir string
-	var useStdin bool
 	var imagePaths []string
 	var filePaths []string
 	var audioPaths []string
 	var videoPaths []string
-	var positional []string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -134,21 +132,6 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 			}
 			i++
 			videoPaths = append(videoPaths, args[i])
-		case "--stdin":
-			useStdin = true
-		case "--at-users":
-			if i+1 >= len(args) {
-				return req, "", fmt.Errorf("--at-users requires a value")
-			}
-			i++
-			for _, uid := range strings.Split(args[i], ",") {
-				uid = strings.TrimSpace(uid)
-				if uid != "" {
-					req.AtUsers = append(req.AtUsers, uid)
-				}
-			}
-		case "--at-all":
-			req.AtAll = true
 		case "--data-dir":
 			if i+1 >= len(args) {
 				return req, "", fmt.Errorf("--data-dir requires a value")
@@ -158,27 +141,16 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 		case "--help", "-h":
 			return req, "", errSendUsage
 		default:
-			positional = append(positional, args[i])
+			return req, "", fmt.Errorf("unexpected argument %q: text-only sends are not supported; use -m together with --image/--file", args[i])
 		}
 	}
 
-	if useStdin {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return req, "", fmt.Errorf("reading stdin: %w", err)
-		}
-		req.Message = strings.TrimSpace(string(data))
-	}
 	if req.Project == "" {
 		req.Project = strings.TrimSpace(os.Getenv("AGENT_BRIDGE_PROJECT"))
 	}
 	if req.SessionKey == "" {
 		req.SessionKey = strings.TrimSpace(os.Getenv("AGENT_BRIDGE_SESSION_KEY"))
 	}
-	if req.Message == "" {
-		req.Message = strings.Join(positional, " ")
-	}
-
 	maxAtt := resolveMaxAttachmentSize(loadSendConfigBestEffort())
 
 	images, err := loadImageAttachments(imagePaths, maxAtt)
@@ -208,8 +180,11 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 	req.Audios = audioFiles
 	req.Videos = videoFiles
 
-	if req.Message == "" && req.TTSText == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
-		return req, "", fmt.Errorf("message, tts text, or attachment is required")
+	if req.TTSText == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
+		return req, "", fmt.Errorf("an attachment (--image/--file/--audio/--video) or --tts text is required")
+	}
+	if req.Message != "" && len(req.Images) == 0 && len(req.Files) == 0 {
+		return req, "", fmt.Errorf("--message must accompany --image or --file; plain text sends are not supported")
 	}
 
 	return req, dataDir, nil
@@ -339,10 +314,6 @@ func buildSendPayload(req core.SendRequest) ([]byte, error) {
 	return json.Marshal(req)
 }
 
-func decodeSendPayload(data []byte, req *core.SendRequest) error {
-	return json.Unmarshal(data, req)
-}
-
 func resolveSocketPath(dataDir string) string {
 	if dataDir != "" {
 		return filepath.Join(dataDir, "run", "api.sock")
@@ -358,44 +329,34 @@ func resolveSocketPath(dataDir string) string {
 }
 
 func printSendUsage() {
-	fmt.Println(`Usage: agent-bridge send [options] <message>
-       agent-bridge send [options] -m <message>
-       agent-bridge send [options] --stdin < file
-       agent-bridge send [options] --image <path>
+	fmt.Println(`Usage: agent-bridge send [options] --image <path>
        agent-bridge send [options] --file <path>
        agent-bridge send [options] --audio <path>
        agent-bridge send [options] --video <path>
        agent-bridge send [options] --tts <text>
-       echo "msg" | agent-bridge send [options] --stdin
 
-Send a message, attachment, or synthesized voice message to an active agent-bridge session.
+Send attachments or a synthesized voice message to an active agent-bridge session.
+Text-only messages are not supported; reply with text directly instead.
 
 Options:
-  -m, --message <text>     Message to send (preferred over positional args)
-      --cwd <path>         Start a new session in this working directory
-      --work-dir <path>    Alias for --cwd
-      --tts <text>         Synthesize text and send it as a voice/audio message
+  -m, --message <text>     Caption sent with --image/--file (not allowed alone)
       --image <path>       Send an image attachment (repeatable)
       --file <path>        Send a file attachment (repeatable)
       --audio <path>       Send an audio attachment (repeatable)
       --video <path>       Send a video attachment (repeatable)
-      --stdin              Read message from stdin (best for long/special-char messages)
-      --at-users <ids>     @ user IDs, comma-separated (DingTalk)
-      --at-all             @ everyone (DingTalk)
+      --tts <text>         Synthesize text and send it as a voice/audio message
+      --cwd <path>         Start a new session in this working directory
+      --work-dir <path>    Alias for --cwd
   -p, --project <name>     Target project (optional if only one project)
   -s, --session <key>      Target session key (optional, picks first active)
       --data-dir <path>    Data directory (default: ~/.agent-bridge)
   -h, --help               Show this help
 
 Examples:
-  agent-bridge send "Daily summary: ..."
-  agent-bridge send -m "Build completed successfully"
-  agent-bridge send --message "Chart generated" --image /tmp/chart.png
+  agent-bridge send --image /tmp/chart.png
+  agent-bridge send -m "Chart generated" --image /tmp/chart.png
   agent-bridge send --file /tmp/report.pdf
   agent-bridge send --video /tmp/demo.mp4
   agent-bridge send --audio /tmp/voice.opus
-  agent-bridge send --tts "Hello from agent-bridge"
-  agent-bridge send --stdin <<'EOF'
-    Long message with "special" chars, $variables, and newlines
-  EOF`)
+  agent-bridge send --tts "Hello from agent-bridge"`)
 }

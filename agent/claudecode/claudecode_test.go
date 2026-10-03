@@ -11,28 +11,6 @@ import (
 	"agent-bridge/core"
 )
 
-func TestNew_ParsesRunAsUserAndRunAsEnv(t *testing.T) {
-	opts := map[string]any{
-		"work_dir":    t.TempDir(),
-		"run_as_user": "partseeker-coder",
-		"run_as_env":  []any{"PGSSLROOTCERT", "PGSSLMODE"},
-	}
-	a, err := New(opts)
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	ag, ok := a.(*Agent)
-	if !ok {
-		t.Fatalf("agent is not *Agent: %T", a)
-	}
-	if ag.spawnOpts.RunAsUser != "partseeker-coder" {
-		t.Errorf("spawnOpts.RunAsUser = %q, want %q", ag.spawnOpts.RunAsUser, "partseeker-coder")
-	}
-	if got := ag.spawnOpts.EnvAllowlist; len(got) != 2 || got[0] != "PGSSLROOTCERT" || got[1] != "PGSSLMODE" {
-		t.Errorf("spawnOpts.EnvAllowlist = %v, want [PGSSLROOTCERT PGSSLMODE]", got)
-	}
-}
-
 func TestNew_RunAsUserSkipsClaudeLookPath(t *testing.T) {
 	// With run_as_user set, the supervisor's PATH lookup for "claude" is
 	// skipped because the target user's PATH is what matters. Verify that
@@ -604,14 +582,16 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 	// run_as_user to skip the supervisor-side LookPath check, since the
 	// fake "my-cli" binary doesn't exist on the test host's PATH.
 	//
-	// run_as_user only short-circuits LookPath on platforms where
-	// SpawnOptions.IsolationMode() can be true — i.e. Unix. On Windows
-	// it always returns false (see core/runas_windows.go), so the fake
-	// CLI would fail LookPath and New() would error out before the
-	// round-trip assertions run.
+	// Put a fake "my-cli" on PATH so New() passes its LookPath check.
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "my-cli")
 	if runtime.GOOS == "windows" {
-		t.Skip("run_as_user-based LookPath bypass is Unix-only")
+		fake += ".exe"
 	}
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	parent := &Agent{
 		cmd:              "my-cli",
 		cliExtraArgs:     []string{"code", "--add-dir", "/parent"},
@@ -627,7 +607,6 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 	}
 	opts := parent.WorkspaceAgentOptions()
 	opts["work_dir"] = t.TempDir()
-	opts["run_as_user"] = "skip-lookpath"
 
 	a, err := New(opts)
 	if err != nil {

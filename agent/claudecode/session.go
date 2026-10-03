@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"agent-bridge/core"
+
 	"github.com/google/uuid"
 )
 
@@ -112,9 +113,7 @@ func writeTempAppendPromptFile(ccDataDir, content string) (string, error) {
 		return "", err
 	}
 	// os.CreateTemp defaults to mode 0600 owned by the agent-bridge process
-	// user (often root when launched by systemd). When the agent is spawned
-	// under run_as_user, the target user is different and gets EACCES on
-	// 0600 root-owned files (issue #1429). The prompt is operator config,
+	// user (often root when launched by systemd). The prompt is operator config,
 	// not a secret, so make it world-readable.
 	if err := f.Chmod(0o644); err != nil {
 		_ = f.Close()
@@ -128,7 +127,7 @@ func writeTempAppendPromptFile(ccDataDir, content string) (string, error) {
 	return f.Name(), nil
 }
 
-func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, disableVerbose bool, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	// Claude Code rejects bypassPermissions when running as root.
@@ -215,21 +214,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		outerArgs = append(outerArgs, "--model", model)
 	}
 
-	slog.Debug("claudeSession: starting", "innerArgs", core.RedactArgs(innerArgs), "outerArgs", core.RedactArgs(outerArgs), "dir", workDir, "mode", mode, "run_as_user", spawnOpts.RunAsUser)
-
-	// Per-spawn defense in depth: if run_as_user is set, re-run the cheap
-	// preflight (sudo still works + target still can't escalate) right
-	// before we build the command. This catches sudoers being edited
-	// between startup preflight and now.
-	if spawnOpts.IsolationMode() {
-		verifyCtx, verifyCancel := context.WithTimeout(sessionCtx, 10*time.Second)
-		err := core.VerifyRunAsUserCheap(verifyCtx, core.ExecSudoRunner{}, spawnOpts.RunAsUser)
-		verifyCancel()
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("claudeSession: run_as_user spawn refused: %w", err)
-		}
-	}
+	slog.Debug("claudeSession: starting", "innerArgs", core.RedactArgs(innerArgs), "outerArgs", core.RedactArgs(outerArgs), "dir", workDir, "mode", mode)
 
 	// Build final argument list.
 	// When cmdArgsFlag is set (e.g. "-a"), inner args are bundled into a
@@ -248,12 +233,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		allArgs = append(allArgs, innerArgs...)
 		allArgs = append(allArgs, outerArgs...)
 	}
-	// Under run_as_user isolation, sudo -i ignores cmd.Dir (it chdirs to the
-	// target user's HOME), so the workspace must be re-applied inside the
-	// spawn. WorkDir tells BuildSpawnCommand to wrap the command with a chdir;
-	// the path itself is passed through RunAsChdirEnv below.
-	spawnOpts.WorkDir = workDir
-	cmd := core.BuildSpawnCommand(sessionCtx, spawnOpts, cliBin, allArgs...)
+	cmd := exec.CommandContext(sessionCtx, cliBin, allArgs...)
 	cmd.Dir = workDir
 	// Put the child into its own process group so Close() can terminate the
 	// entire descendant tree (claude CLI → MCP server bridges → ...) with a
@@ -274,19 +254,6 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	// hook itself without this env var, so the real work happens only
 	// once.
 	env = core.MergeEnv(env, []string{"AGENT_BRIDGE_PERMISSION_HOOK_SKIP=1"})
-	// Carry the intended working directory across the sudo -i boundary so the
-	// re-chdir wrapper in BuildSpawnCommand can restore it (sudo -i would
-	// otherwise leave the agent in the target user's HOME). Only meaningful
-	// under isolation; FilterEnvForSpawn keeps it because mergedAllowlist
-	// includes RunAsChdirEnv whenever WorkDir is set.
-	if spawnOpts.IsolationMode() && workDir != "" {
-		env = core.MergeEnv(env, []string{core.RunAsChdirEnv + "=" + workDir})
-	}
-	// When run_as_user is set, strip the supervisor's environment down to
-	// the allowlist before passing it to sudo. sudo --preserve-env also
-	// enforces this, but filtering here makes the agent-bridge spawn argv
-	// the single source of truth.
-	env = core.FilterEnvForSpawn(env, spawnOpts)
 	cmd.Env = env
 
 	var providerEnvSnapshot []string
