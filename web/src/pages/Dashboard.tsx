@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import {
   Activity, Server, Layers, MessageSquare, Clock, ChevronRight,
@@ -13,7 +12,6 @@ import { formatUptime, formatTime } from '@/lib/utils';
 const MAX_ITEMS = 4;
 
 export default function Dashboard() {
-  const { t } = useTranslation();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [recentSessions, setRecentSessions] = useState<(Session & { project: string })[]>([]);
@@ -68,9 +66,9 @@ export default function Dashboard() {
     <div className="space-y-8 animate-fade-in ">
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <StatCard label={t('dashboard.uptime')} value={status ? formatUptime(status.uptime_seconds) : '-'} accent />
-        <StatCard label={t('dashboard.platforms')} value={status?.connected_platforms?.length ?? 0} />
-        <StatCard label={t('dashboard.projects')} value={status?.projects_count ?? 0} />
+        <StatCard label={"Uptime"} value={status ? formatUptime(status.uptime_seconds) : '-'} accent />
+        <StatCard label={"Platforms"} value={status?.connected_platforms?.length ?? 0} />
+        <StatCard label={"Projects"} value={status?.projects_count ?? 0} />
       </div>
 
       {/* Projects */}
@@ -78,15 +76,15 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
             <Server size={14} className="text-gray-400" />
-            {t('nav.projects')}
+            {"Projects"}
           </h3>
           <Link to="/projects" className="text-xs text-accent hover:underline flex items-center gap-0.5">
-            {t('common.viewAll')} <ChevronRight size={12} />
+            {"View all"} <ChevronRight size={12} />
           </Link>
         </div>
         {projects.length === 0 ? (
           <div className="rounded-xl border border-gray-200/80 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] p-8">
-            <EmptyState message={t('projects.noProjects')} icon={Layers} />
+            <EmptyState message={"No projects configured"} icon={Layers} />
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -125,15 +123,15 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
             <MessageSquare size={14} className="text-gray-400" />
-            {t('dashboard.recentSessions')}
+            {"Recent sessions"}
           </h3>
           <Link to="/chat" className="text-xs text-accent hover:underline flex items-center gap-0.5">
-            {t('common.viewAll')} <ChevronRight size={12} />
+            {"View all"} <ChevronRight size={12} />
           </Link>
         </div>
         {recentSessions.length === 0 ? (
           <div className="rounded-xl border border-gray-200/80 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] p-8">
-            <p className="text-xs text-gray-400 text-center">{t('sessions.noSessions')}</p>
+            <p className="text-xs text-gray-400 text-center">{"No sessions"}</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">

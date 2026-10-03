@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { Server, ArrowRight, FolderKanban, Plus, Smartphone, Settings2 } from 'lucide-react';
 import { Card, Badge, Button, Input, Modal, EmptyState } from '@/components/ui';
@@ -14,15 +13,12 @@ const AGENT_OPTIONS = [
 ];
 
 const PLATFORM_OPTIONS: { key: string; label: string; color: string; qr?: boolean }[] = [
-  { key: 'feishu', label: 'Feishu / Lark', color: 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400', qr: true },
   { key: 'weixin', label: 'WeChat', color: 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400', qr: true },
   { key: 'telegram', label: 'Telegram', color: 'bg-sky-50 dark:bg-sky-900/30 text-sky-600 dark:text-sky-400' },
   { key: 'qq', label: 'QQ (OneBot)', color: 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-400' },
-  { key: 'qqbot', label: 'QQ Bot (Official)', color: 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-400' },
 ];
 
 export default function ProjectList() {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +57,7 @@ export default function ProjectList() {
     setSelectedPlat('');
   };
 
-  const isQRPlatform = (type: string) => type === 'feishu' || type === 'lark' || type === 'weixin';
+  const isQRPlatform = (type: string) => type === 'weixin';
 
   const handlePlatformSelect = (key: string) => {
     setSelectedPlat(key);
@@ -80,10 +76,7 @@ export default function ProjectList() {
   };
 
   const handleManualDone = async () => {
-    // For non-QR platforms, use feishu EnsureProject to create the project skeleton,
-    // then the user configures platform details from the project detail page.
-    // We use the feishu save endpoint with empty credentials just to create the project.
-    // Actually, let's guide the user to the project detail page to configure.
+    // For non-QR platforms, guide the user to the project detail page to configure.
     setShowWizard(false);
     fetch();
     navigate(`/projects/${newProjName}`);
@@ -97,14 +90,14 @@ export default function ProjectList() {
     <div className="animate-fade-in space-y-4 ">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-900 dark:text-white">{t('projects.title')}</h2>
+        <h2 className="text-lg font-bold text-gray-900 dark:text-white">{"Projects"}</h2>
         <Button size="sm" onClick={openWizard}>
-          <Plus size={14} /> {t('setup.addProject', 'Add project')}
+          <Plus size={14} /> {"Add project"}
         </Button>
       </div>
 
       {projects.length === 0 ? (
-        <EmptyState message={t('projects.noProjects')} icon={FolderKanban} />
+        <EmptyState message={"No projects configured"} icon={FolderKanban} />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {projects.map((p) => (
@@ -125,7 +118,7 @@ export default function ProjectList() {
                   )}
                 </div>
                 <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mt-auto pt-3 border-t border-gray-100 dark:border-gray-800">
-                  <span>{p.sessions_count} {t('nav.sessions').toLowerCase()}</span>
+                  <span>{p.sessions_count} {"Sessions".toLowerCase()}</span>
                 </div>
               </Card>
             </Link>
@@ -137,26 +130,26 @@ export default function ProjectList() {
       <Modal
         open={showWizard}
         onClose={() => setShowWizard(false)}
-        title={t('setup.addProject', 'Add project')}
+        title={"Add project"}
       >
         {wizStep === 'name' && (
           <div className="space-y-4 py-2">
             <Input
-              label={t('setup.projectName', 'Project name')}
+              label={"Project name"}
               value={newProjName}
               onChange={(e) => setNewProjName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
               placeholder="my-project"
               autoFocus
             />
             <Input
-              label={t('setup.workDir', 'Working directory')}
+              label={"Working directory"}
               value={newWorkDir}
               onChange={(e) => setNewWorkDir(e.target.value)}
               placeholder="/path/to/project"
             />
             <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                {t('setup.agentType', 'Agent type')}
+                {"Agent type"}
               </label>
               <select
                 value={newAgentType}
@@ -169,9 +162,9 @@ export default function ProjectList() {
               </select>
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" onClick={() => setShowWizard(false)}>{t('common.cancel')}</Button>
+              <Button variant="secondary" onClick={() => setShowWizard(false)}>{"Cancel"}</Button>
               <Button disabled={!newProjName.trim() || !newWorkDir.trim()} onClick={() => setWizStep('platform')}>
-                {t('setup.next', 'Next')}
+                {"Next"}
               </Button>
             </div>
           </div>
@@ -180,7 +173,7 @@ export default function ProjectList() {
         {wizStep === 'platform' && (
           <div className="space-y-3 py-2">
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-              {t('setup.choosePlatform', 'Choose a platform to connect:')}
+              {"Choose a platform to connect:"}
             </p>
             <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
               {PLATFORM_OPTIONS.map(({ key, label, color, qr }) => (
@@ -195,21 +188,21 @@ export default function ProjectList() {
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{label}</div>
                     <div className="text-[11px] text-gray-400">
-                      {qr ? t('setup.scanToConnect', 'Scan QR code') : t('setup.manualSetup', 'Manual setup')}
+                      {qr ? "Scan QR code to connect" : "Manual setup"}
                     </div>
                   </div>
                 </button>
               ))}
             </div>
             <div className="flex justify-start pt-2">
-              <Button variant="secondary" size="sm" onClick={() => setWizStep('name')}>{t('common.back')}</Button>
+              <Button variant="secondary" size="sm" onClick={() => setWizStep('name')}>{"Back"}</Button>
             </div>
           </div>
         )}
 
         {wizStep === 'qr' && isQRPlatform(selectedPlat) && (
           <PlatformSetupQR
-            platformType={selectedPlat as 'feishu' | 'weixin'}
+            platformType={selectedPlat as 'weixin'}
             projectName={newProjName}
             workDir={newWorkDir}
             agentType={newAgentType}
@@ -236,10 +229,10 @@ export default function ProjectList() {
           <div className="space-y-4 py-4 text-center">
             <Settings2 size={40} className="mx-auto text-gray-400" />
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              {t('setup.manualHint', 'For {{platform}}, please configure credentials in config.toml or via the project detail page after creating the project.', { platform: PLATFORM_OPTIONS.find(o => o.key === selectedPlat)?.label || selectedPlat })}
+              {`For ${PLATFORM_OPTIONS.find(o => o.key === selectedPlat)?.label || selectedPlat}, please configure credentials in config.toml and restart the service.`}
             </p>
             <div className="flex justify-center gap-2">
-              <Button variant="secondary" onClick={() => setWizStep('platform')}>{t('common.back')}</Button>
+              <Button variant="secondary" onClick={() => setWizStep('platform')}>{"Back"}</Button>
             </div>
           </div>
         )}

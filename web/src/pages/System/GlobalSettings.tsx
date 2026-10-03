@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Save, Loader2 } from 'lucide-react';
 import { Card, Button, Input } from '@/components/ui';
 import { getGlobalSettings, updateGlobalSettings, type GlobalSettings as GS } from '@/api/settings';
@@ -65,7 +64,6 @@ function NumberInput({ value, onChange, label, hint, min, max }: { value: number
 }
 
 export default function GlobalSettings() {
-  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cleanupProgress, setCleanupProgress] = useState(false);
@@ -129,7 +127,7 @@ export default function GlobalSettings() {
         rate_limit_max_messages: rlMax,
         rate_limit_window_secs: rlWindow,
       });
-      setMsg(t('common.success'));
+      setMsg("Success");
       setTimeout(() => setMsg(''), 3000);
     } catch (e: any) {
       setMsg(e.message || 'Error');
@@ -142,7 +140,7 @@ export default function GlobalSettings() {
     return (
       <Card>
         <div className="flex items-center gap-2 text-gray-400 animate-pulse py-8 justify-center">
-          <Loader2 size={16} className="animate-spin" /> {t('common.loading', 'Loading...')}
+          <Loader2 size={16} className="animate-spin" /> {"Loading…"}
         </div>
       </Card>
     );
@@ -152,102 +150,102 @@ export default function GlobalSettings() {
     <div className="space-y-5">
       {/* General */}
       <Card>
-        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('settings.general', 'General')}</h3>
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{"General"}</h3>
         <div className="space-y-4 max-w-lg">
           <Select
-            label={t('settings.attachmentSend', 'Attachment send')}
+            label={"Attachment send"}
             value={attachmentSend}
             onChange={setAttachmentSend}
-            hint={t('settings.attachmentSendHint', 'Send file/image attachments back to platform')}
-            options={ATTACHMENT_OPTS.map((v) => ({ value: v, label: v || t('settings.default', 'default') }))}
+            hint={"Send file/image attachments back to platform"}
+            options={ATTACHMENT_OPTS.map((v) => ({ value: v, label: v || "default" }))}
           />
           <NumberInput
-            label={t('settings.idleTimeout', 'Idle timeout (min)')}
+            label={"Idle timeout (min)"}
             value={idleTimeout}
             onChange={setIdleTimeout}
             min={0}
-            hint={t('settings.idleTimeoutHint', 'Auto-stop agent after N minutes of inactivity; 0 = disabled')}
+            hint={"Auto-stop agent after N minutes of inactivity; 0 = disabled"}
           />
         </div>
       </Card>
 
       {/* Display */}
       <Card>
-        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('settings.display', 'Display')}</h3>
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{"Display"}</h3>
         <div className="space-y-4 max-w-lg">
           <Toggle
-            label={t('settings.thinkingMessages', 'Thinking messages')}
+            label={"Thinking messages"}
             value={thinkingMessages}
             onChange={setThinkingMessages}
-            hint={t('settings.thinkingMessagesHint', 'Show or hide intermediate thinking messages')}
+            hint={"Show or hide intermediate thinking messages"}
           />
           <NumberInput
-            label={t('settings.thinkingMaxLen', 'Thinking max length')}
+            label={"Thinking max length"}
             value={thinkingMaxLen}
             onChange={setThinkingMaxLen}
             min={0}
-            hint={t('settings.thinkingMaxLenHint', 'Max characters for thinking messages; 0 = no truncation')}
+            hint={"Max characters for thinking messages; 0 = no truncation"}
           />
           <Toggle
-            label={t('settings.toolMessages', 'Tool progress')}
+            label={"Tool progress"}
             value={toolMessages}
             onChange={setToolMessages}
-            hint={t('settings.toolMessagesHint', 'Show or hide tool progress messages')}
+            hint={"Show or hide tool progress messages"}
           />
           <Toggle label="Clean up progress after completion" value={cleanupProgress} onChange={setCleanupProgress} hint="Delete thinking and tool messages on supported channels. Temporary errors are deleted after successful delivery; final errors and assistant text stay visible." />
           <Toggle label="Collapse tool messages" value={collapseTools} onChange={setCollapseTools} hint="Show the current activity only, without tool inputs or results." />
           <NumberInput
-            label={t('settings.toolMaxLen' , 'Tool max length')}
+            label={"Tool max length"}
             value={toolMaxLen}
             onChange={setToolMaxLen}
             min={0}
-            hint={t('settings.toolMaxLenHint', 'Max characters for tool use messages; 0 = no truncation')}
+            hint={"Max characters for tool use messages; 0 = no truncation"}
           />
         </div>
       </Card>
 
       {/* Stream preview */}
       <Card>
-        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('settings.streamPreview', 'Stream preview')}</h3>
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{"Stream preview"}</h3>
         <div className="space-y-4 max-w-lg">
-          <Toggle label={t('settings.streamPreviewEnabled', 'Enable')} value={spEnabled} onChange={setSpEnabled} hint={t('settings.streamPreviewEnabledHint', 'Show real-time streaming updates in IM')} />
+          <Toggle label={"Enable"} value={spEnabled} onChange={setSpEnabled} hint={"Show real-time streaming updates in IM"} />
           <NumberInput
-            label={t('settings.streamPreviewInterval', 'Interval (ms)')}
+            label={"Interval (ms)"}
             value={spInterval}
             onChange={setSpInterval}
             min={100}
-            hint={t('settings.streamPreviewIntervalHint', 'Minimum milliseconds between preview updates')}
+            hint={"Minimum milliseconds between preview updates"}
           />
         </div>
       </Card>
 
       {/* Rate limit */}
       <Card>
-        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('settings.rateLimit', 'Rate limit')}</h3>
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{"Rate limit"}</h3>
         <div className="space-y-4 max-w-lg">
           <NumberInput
-            label={t('settings.rlMaxMessages', 'Max messages')}
+            label={"Max messages"}
             value={rlMax}
             onChange={setRlMax}
             min={0}
-            hint={t('settings.rlMaxMessagesHint', 'Max messages per window; 0 = disabled')}
+            hint={"Max messages per window; 0 = disabled"}
           />
           <NumberInput
-            label={t('settings.rlWindowSecs', 'Window (sec)')}
+            label={"Window (sec)"}
             value={rlWindow}
             onChange={setRlWindow}
             min={1}
-            hint={t('settings.rlWindowSecsHint', 'Time window in seconds')}
+            hint={"Time window in seconds"}
           />
         </div>
       </Card>
 
       {/* Log */}
       <Card>
-        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('settings.log', 'Log')}</h3>
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{"Log"}</h3>
         <div className="space-y-4 max-w-lg">
           <Select
-            label={t('settings.logLevel', 'Log level')}
+            label={"Log level"}
             value={logLevel}
             onChange={setLogLevel}
             options={LOG_LEVELS.map((l) => ({ value: l, label: l }))}
@@ -258,10 +256,10 @@ export default function GlobalSettings() {
       {/* Save */}
       <div className="max-w-lg">
         <Button loading={saving} onClick={handleSave}>
-          <Save size={16} /> {t('common.save')}
+          <Save size={16} /> {"Save"}
         </Button>
         {msg && (
-          <p className={cn('text-sm mt-2', msg === t('common.success') ? 'text-accent' : 'text-red-500')}>{msg}</p>
+          <p className={cn('text-sm mt-2', msg === "Success" ? 'text-accent' : 'text-red-500')}>{msg}</p>
         )}
       </div>
     </div>

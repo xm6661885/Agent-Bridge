@@ -141,14 +141,14 @@ func TestRestartNotify_DispatchesAfterPlatformReady(t *testing.T) {
 // the notify is queued (e.g. synchronous platforms), the dispatch
 // still happens without a 10s wait.
 func TestRestartNotify_AlreadyReadySucceedsImmediately(t *testing.T) {
-	plat := &restartNotifyStub{name: "feishu"}
+	plat := &restartNotifyStub{name: "telegram"}
 	engine := NewEngine("test", &stubAgent{}, []Platform{plat}, "")
 
 	// Mark ready first.
 	plat.markReady(t, engine)
 
 	engine.SetPendingRestartNotify(&RestartRequest{
-		Platform:   "feishu",
+		Platform:   "telegram",
 		SessionKey: "session-1",
 	})
 

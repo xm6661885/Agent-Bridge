@@ -28,7 +28,7 @@ var (
 // asterisk forms (`**bold**`, `*italic*`), so dropping the underscore forms
 // is the safe trade-off here. Inputs containing literal `_italic_` will keep
 // their underscores; this is a small cosmetic loss vs. losing identifier
-// integrity in TTS / LINE / WeChat output.
+// integrity in plain-text / WeChat output.
 func StripMarkdown(s string) string {
 	// Preserve code block content but remove fences
 	s = reCodeBlock.ReplaceAllString(s, "$1")

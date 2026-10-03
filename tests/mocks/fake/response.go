@@ -38,9 +38,9 @@ func TestUsageReport(provider, accountID, email string) *core.UsageReport {
 // TestPermissionModeInfo creates a test permission mode info.
 func TestPermissionModeInfo(key, name, nameZh, desc, descZh string) core.PermissionModeInfo {
 	return core.PermissionModeInfo{
-		Key:    key,
-		Name:   name,
-		Desc:   desc,
+		Key:  key,
+		Name: name,
+		Desc: desc,
 	}
 }
 

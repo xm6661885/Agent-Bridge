@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -434,18 +433,6 @@ func (p *stubCompactProgressPlatform) UpdateMessage(_ context.Context, _ any, co
 	return nil
 }
 
-func (p *stubCompactProgressPlatform) BuildRichCard(status CardStatus, title string, steps []ToolStep, markdown string, streaming bool, statusFooter string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "rich status=%s title=%s streaming=%t footer=%s\n", status, title, streaming, statusFooter)
-	for _, step := range steps {
-		fmt.Fprintf(&b, "step=%+v\n", step)
-	}
-	if markdown != "" {
-		fmt.Fprintf(&b, "markdown=%s\n", markdown)
-	}
-	return b.String()
-}
-
 func (p *stubCompactProgressPlatform) getPreviewStarts() []string {
 	p.previewMu.Lock()
 	defer p.previewMu.Unlock()
@@ -484,21 +471,11 @@ func (p *stubDoneReactionPlatform) doneSnapshot() (int, []any) {
 	return p.doneCount, ctxs
 }
 
-type stubAskQuestionRichCardPlatform struct {
-	stubCardPlatform
-}
-
-func (p *stubAskQuestionRichCardPlatform) BuildRichCard(status CardStatus, title string, steps []ToolStep, markdown string, streaming bool, statusFooter string) string {
-	return "rich card"
-}
-
 type stubModelModeAgent struct {
 	stubAgent
 	model           string
 	mode            string
 	reasoningEffort string
-	providers       []ProviderConfig
-	active          string
 }
 
 type stubStrictModelAgent struct {
@@ -535,39 +512,6 @@ func (a *stubModelModeAgent) AvailableModels(_ context.Context) []ModelOption {
 func (a *stubStrictModelAgent) AvailableModels(_ context.Context) []ModelOption {
 	a.calls++
 	return append([]ModelOption(nil), a.models...)
-}
-
-func (a *stubModelModeAgent) SetProviders(providers []ProviderConfig) {
-	a.providers = providers
-}
-
-func (a *stubModelModeAgent) GetActiveProvider() *ProviderConfig {
-	for i := range a.providers {
-		if a.providers[i].Name == a.active {
-			return &a.providers[i]
-		}
-	}
-	return nil
-}
-
-func (a *stubModelModeAgent) ListProviders() []ProviderConfig {
-	result := make([]ProviderConfig, len(a.providers))
-	copy(result, a.providers)
-	return result
-}
-
-func (a *stubModelModeAgent) SetActiveProvider(name string) bool {
-	if name == "" {
-		a.active = ""
-		return true
-	}
-	for _, prov := range a.providers {
-		if prov.Name == name {
-			a.active = name
-			return true
-		}
-	}
-	return false
 }
 
 func (a *stubModelModeAgent) SetMode(mode string) {
@@ -701,43 +645,6 @@ func waitDeleteModePhase(t *testing.T, e *Engine, sessionKey, targetPhase string
 	t.Fatalf("timed out waiting for delete mode phase %q", targetPhase)
 }
 
-type stubProviderAgent struct {
-	stubAgent
-	providers []ProviderConfig
-	active    string
-}
-
-func (a *stubProviderAgent) ListProviders() []ProviderConfig {
-	return a.providers
-}
-
-func (a *stubProviderAgent) SetProviders(providers []ProviderConfig) {
-	a.providers = providers
-}
-
-func (a *stubProviderAgent) GetActiveProvider() *ProviderConfig {
-	for i := range a.providers {
-		if a.providers[i].Name == a.active {
-			return &a.providers[i]
-		}
-	}
-	return nil
-}
-
-func (a *stubProviderAgent) SetActiveProvider(name string) bool {
-	if name == "" {
-		a.active = ""
-		return true
-	}
-	for _, prov := range a.providers {
-		if prov.Name == name {
-			a.active = name
-			return true
-		}
-	}
-	return false
-}
-
 type stubUsageAgent struct {
 	stubAgent
 	report *UsageReport
@@ -793,8 +700,8 @@ func TestReceiveMessage_SerialKeyQueuesIndependentSessions(t *testing.T) {
 	}
 
 	e.ReceiveMessage(p, &Message{SessionKey: "test:group:user-b", SerialKey: "test:group:1", Platform: "test", MessageID: "b", Content: "second"})
-	if got := p.getSent(); len(got) == 0 || got[len(got)-1] != e.i18n.T(MsgMessageQueued) {
-		t.Fatalf("queued message notification = %#v, want %q", got, e.i18n.T(MsgMessageQueued))
+	if got := p.getSent(); len(got) == 0 || got[len(got)-1] != "Message received — will process after the current task finishes." {
+		t.Fatalf("queued message notification = %#v, want %q", got, "Message received — will process after the current task finishes.")
 	}
 	if agent.count() != 1 {
 		t.Fatalf("second independent session started before first finished: %d", agent.count())
@@ -1422,7 +1329,7 @@ func TestProcessInteractiveEvents_ReplyFooterPrefersSessionRuntimeState(t *testi
 // Regression: an agent that only exposes a workdir (no model/effort/usage)
 // must not emit a footer at all. Previously this produced a footer like
 // "*~*" when the agent was running in the user's home directory, which
-// rendered as a bare "~" on Feishu/Weixin.
+// rendered as a bare "~" on Telegram/Weixin.
 func TestProcessInteractiveEvents_SuppressesReplyFooterWhenOnlyWorkDir(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
@@ -1457,7 +1364,7 @@ func TestProcessInteractiveEvents_SuppressesReplyFooterWhenOnlyWorkDir(t *testin
 
 func TestProcessInteractiveEvents_HiddenToolProgressKeepsPreviewOnFinalize(t *testing.T) {
 	p := &mockKeepPreviewPlatform{}
-	p.n = "feishu"
+	p.n = "telegram"
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 	e.SetDisplayConfig(DisplayCfg{ThinkingMessages: true, ThinkingMaxLen: 300, ToolMaxLen: 500, ToolMessages: false})
 	sessionKey := "test:user1"
@@ -1533,9 +1440,9 @@ func TestProcessInteractiveEvents_ToolMessagesDisabledSuppressesToolProgressOnly
 }
 
 func TestProcessInteractiveEvents_CompactProgressCoalescesThinkingAndToolUse(t *testing.T) {
-	p := &stubCompactProgressPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCompactProgressPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	sessionKey := "feishu:user1"
+	sessionKey := "telegram:user1"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s1")
 	state := &interactiveState{
@@ -1576,11 +1483,11 @@ func TestProcessInteractiveEvents_CompactProgressCoalescesThinkingAndToolUse(t *
 
 func TestProcessInteractiveEvents_CardProgressUsesCardTemplate(t *testing.T) {
 	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+		stubPlatformEngine: stubPlatformEngine{n: "telegram"},
 		style:              "card",
 	}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	sessionKey := "feishu:user2"
+	sessionKey := "telegram:user2"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s2")
 	state := &interactiveState{
@@ -1626,21 +1533,18 @@ func TestProcessInteractiveEvents_CardProgressUsesCardTemplate(t *testing.T) {
 }
 
 func TestProcessInteractiveEvents_FinalReplyUsesWorkspaceForReferenceRendering(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "weixin"}
 	a := &namedStubModelModeAgent{name: "codex"}
 	e := NewEngine("test", a, []Platform{p}, "")
 	e.SetReferenceConfig(ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	})
 
-	sessionKey := "feishu:user-relative"
+	sessionKey := "weixin:user-relative"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s-relative")
 	state := &interactiveState{
@@ -1669,18 +1573,18 @@ func TestProcessInteractiveEvents_FinalReplyUsesWorkspaceForReferenceRendering(t
 }
 
 func TestProcessInteractiveEvents_FinalReplyRemainsRawWhenReferencesDisabled(t *testing.T) {
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "weixin"}
 	a := &namedStubModelModeAgent{name: "codex"}
 	e := NewEngine("test", a, []Platform{p}, "")
 	e.SetReferenceConfig(ReferenceRenderCfg{
 		NormalizeAgents: []string{},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	})
 
-	sessionKey := "feishu:user-relative-raw"
+	sessionKey := "weixin:user-relative-raw"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s-relative-raw")
 	state := &interactiveState{
@@ -1711,12 +1615,12 @@ func TestProcessInteractiveEvents_FinalReplyRemainsRawWhenReferencesDisabled(t *
 
 func TestProcessInteractiveEvents_CardProgressUsesStructuredPayloadWhenSupported(t *testing.T) {
 	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+		stubPlatformEngine: stubPlatformEngine{n: "telegram"},
 		style:              "card",
 		supportPayload:     true,
 	}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	sessionKey := "feishu:user3"
+	sessionKey := "telegram:user3"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s3")
 	state := &interactiveState{
@@ -1779,12 +1683,12 @@ func TestProcessInteractiveEvents_CardProgressUsesStructuredPayloadWhenSupported
 }
 
 // TestProcessInteractiveEvents_CardProgressTruncatesToolInputByToolMaxLen verifies
-// that when progress_style=card is used (e.g. Feishu), a long tool input is
+// that when progress_style=card is used (e.g. Telegram), a long tool input is
 // truncated to display.ToolMaxLen in the structured card payload. The original
 // event.ToolInput must remain unmutated.
 func TestProcessInteractiveEvents_CardProgressTruncatesToolInputByToolMaxLen(t *testing.T) {
 	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+		stubPlatformEngine: stubPlatformEngine{n: "telegram"},
 		style:              "card",
 		supportPayload:     true,
 	}
@@ -1796,7 +1700,7 @@ func TestProcessInteractiveEvents_CardProgressTruncatesToolInputByToolMaxLen(t *
 		ToolMessages:     true,
 		Mode:             "full",
 	})
-	sessionKey := "feishu:user-card-truncate"
+	sessionKey := "telegram:user-card-truncate"
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s-card-truncate")
 	state := &interactiveState{
@@ -1843,439 +1747,6 @@ func TestProcessInteractiveEvents_CardProgressTruncatesToolInputByToolMaxLen(t *
 	}
 	if !strings.HasPrefix(toolUseText, "abcdefghij") {
 		t.Fatalf("expected truncated tool input to start with original prefix, got %q", toolUseText)
-	}
-}
-
-func TestProcessInteractiveEvents_RichCardShowsThinkingContent(t *testing.T) {
-	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-		style:              "card",
-		supportPayload:     true,
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-		Mode:             "full",
-		CardMode:         "rich",
-	})
-	sessionKey := "feishu:user-rich-thinking"
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-thinking")
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-thinking",
-	}
-	e.interactiveStates[sessionKey] = state
-
-	agentSession.events <- Event{Type: EventThinking, Content: "Inspecting event routing"}
-	agentSession.events <- Event{Type: EventText, Content: "answer"}
-	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-thinking", time.Now(), nil, nil, state.replyCtx)
-
-	starts := p.getPreviewStarts()
-	if len(starts) != 1 {
-		t.Fatalf("preview starts = %d, want 1", len(starts))
-	}
-	if !strings.Contains(starts[0], "Inspecting event routing") {
-		t.Fatalf("rich card start should contain thinking content, got %q", starts[0])
-	}
-}
-
-func TestProcessInteractiveEvents_RichCardCoalescesToolResult(t *testing.T) {
-	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-		style:              "card",
-		supportPayload:     true,
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-		Mode:             "full",
-		CardMode:         "rich",
-	})
-	sessionKey := "feishu:user-rich-tool-result"
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-tool-result")
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-tool-result",
-	}
-	e.interactiveStates[sessionKey] = state
-
-	code := 0
-	success := true
-	agentSession.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "echo hi"}
-	agentSession.events <- Event{Type: EventToolResult, ToolName: "Bash", ToolResult: "hi", ToolStatus: "completed", ToolExitCode: &code, ToolSuccess: &success}
-	agentSession.events <- Event{Type: EventText, Content: "done"}
-	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-result", time.Now(), nil, nil, state.replyCtx)
-
-	starts := p.getPreviewStarts()
-	if len(starts) != 1 {
-		t.Fatalf("preview starts = %d, want only the rich card start and no separate progress card", len(starts))
-	}
-	rendered := strings.Join(append(starts, p.getPreviewEdits()...), "\n")
-	for _, want := range []string{"echo hi", "completed", "hi"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("rich card should contain %q, got %q", want, rendered)
-		}
-	}
-}
-
-// stubRichCardSilentPlatform implements the full set of rich-card optional
-// interfaces (RichCardSupporter, PreviewStarter, MessageUpdater,
-// RichCardTextStreamer, PreviewCleaner) and tracks every call so tests can
-// assert that NO_REPLY in rich card mode leaves zero footprint.
-type stubRichCardSilentPlatform struct {
-	stubPlatformEngine
-	mu            sync.Mutex
-	previewStarts []string
-	streamTexts   []string
-	updates       []string
-	deleteCount   int
-	nextHandleSeq int
-}
-
-func (p *stubRichCardSilentPlatform) BuildRichCard(status CardStatus, _ string, steps []ToolStep, markdown string, _ bool, _ string) string {
-	return fmt.Sprintf("rich:status=%s steps=%d body=%q", status, len(steps), markdown)
-}
-
-func (p *stubRichCardSilentPlatform) SendPreviewStart(_ context.Context, _ any, content string) (any, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.previewStarts = append(p.previewStarts, content)
-	p.nextHandleSeq++
-	return fmt.Sprintf("handle-%d", p.nextHandleSeq), nil
-}
-
-func (p *stubRichCardSilentPlatform) UpdateMessage(_ context.Context, _ any, content string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.updates = append(p.updates, content)
-	return nil
-}
-
-func (p *stubRichCardSilentPlatform) StreamRichCardText(_ context.Context, _ any, fullText string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.streamTexts = append(p.streamTexts, fullText)
-	return nil
-}
-
-func (p *stubRichCardSilentPlatform) DeletePreviewMessage(_ context.Context, _ any) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.deleteCount++
-	return nil
-}
-
-func (p *stubRichCardSilentPlatform) snapshot() (starts, streams, updates []string, deletes int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	starts = append(starts, p.previewStarts...)
-	streams = append(streams, p.streamTexts...)
-	updates = append(updates, p.updates...)
-	deletes = p.deleteCount
-	return
-}
-
-type stubRichCardResolverPlatform struct {
-	*stubRichCardSilentPlatform
-	resolverMu sync.Mutex
-	calls      []bool
-}
-
-func (p *stubRichCardResolverPlatform) ResolveRichCardMarkdown(_ context.Context, markdown string, final bool) string {
-	p.resolverMu.Lock()
-	p.calls = append(p.calls, final)
-	p.resolverMu.Unlock()
-	return strings.ReplaceAll(markdown, "https://example.com/chart.png", "img_v3_chart")
-}
-
-func (p *stubRichCardResolverPlatform) resolverCallModes() []bool {
-	p.resolverMu.Lock()
-	defer p.resolverMu.Unlock()
-	out := make([]bool, len(p.calls))
-	copy(out, p.calls)
-	return out
-}
-
-func TestProcessInteractiveEvents_RichCardResolvesMarkdownImages(t *testing.T) {
-	p := &stubRichCardResolverPlatform{
-		stubRichCardSilentPlatform: &stubRichCardSilentPlatform{
-			stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-		},
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-	})
-	sessionKey := "feishu:user-rich-image-resolver"
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-image-resolver")
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-image-resolver",
-	}
-	e.interactiveStates[sessionKey] = state
-
-	body := "see ![chart](https://example.com/chart.png)"
-	agentSession.events <- Event{Type: EventText, Content: body}
-	agentSession.events <- Event{Type: EventResult, Content: body, Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-image-resolver", time.Now(), nil, nil, state.replyCtx)
-	_, streams, updates, _ := p.snapshot()
-	rendered := strings.Join(append(streams, updates...), "\n")
-	if !strings.Contains(rendered, "![chart](img_v3_chart)") {
-		t.Fatalf("rich card output should contain resolved image key, got %q", rendered)
-	}
-	if strings.Contains(rendered, "https://example.com/chart.png") {
-		t.Fatalf("rich card output should not contain unresolved remote URL, got %q", rendered)
-	}
-	modes := p.resolverCallModes()
-	if len(modes) == 0 {
-		t.Fatalf("expected resolver to be called")
-	}
-	hasStreamingCall := false
-	hasFinalCall := false
-	for _, final := range modes {
-		if final {
-			hasFinalCall = true
-		} else {
-			hasStreamingCall = true
-		}
-	}
-	if !hasStreamingCall || !hasFinalCall {
-		t.Fatalf("resolver call final flags = %v, want both streaming=false and final=true calls", modes)
-	}
-}
-
-// runRichCardSilentScenario exercises processInteractiveEvents in rich
-// (Card 2.0) mode, sending the given EventText chunks followed by a terminal
-// EventResult. Returns call counts so each test case can assert the no-trace
-// invariant for the (chunk shape, final content) combination.
-func runRichCardSilentScenario(t *testing.T, name string, chunks []string, finalContent string) (starts, streams, updates []string, deletes int) {
-	t.Helper()
-	p := &stubRichCardSilentPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-	})
-	sessionKey := "feishu:user-rich-silent-" + name
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-silent-" + name)
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-silent-" + name,
-	}
-	e.interactiveStates[sessionKey] = state
-
-	for _, chunk := range chunks {
-		agentSession.events <- Event{Type: EventText, Content: chunk}
-	}
-	agentSession.events <- Event{Type: EventResult, Content: finalContent, Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-silent-"+name, time.Now(), nil, nil, state.replyCtx)
-	return p.snapshot()
-}
-
-// TestProcessInteractiveEvents_RichCard_NoReplySingleChunk asserts that a
-// single-chunk NO_REPLY response in rich card mode leaves zero trace: no
-// preview card created, no streaming text update, no card deletion. Lark
-// would otherwise render the Send-then-Delete lifecycle as a "撤回了一条消息"
-// gray bar.
-func TestProcessInteractiveEvents_RichCard_NoReplySingleChunk(t *testing.T) {
-	starts, streams, updates, deletes := runRichCardSilentScenario(t, "single", []string{"NO_REPLY"}, "NO_REPLY")
-	if len(starts) != 0 {
-		t.Fatalf("expected no SendPreviewStart, got %d: %v", len(starts), starts)
-	}
-	if len(streams) != 0 {
-		t.Fatalf("expected no StreamRichCardText, got %d: %v", len(streams), streams)
-	}
-	if len(updates) != 0 {
-		t.Fatalf("expected no UpdateMessage, got %d: %v", len(updates), updates)
-	}
-	if deletes != 0 {
-		t.Fatalf("expected no DeletePreviewMessage, got %d", deletes)
-	}
-}
-
-// TestProcessInteractiveEvents_RichCard_NoReplyChunked asserts the same
-// no-trace invariant when the agent emits NO_REPLY across two text chunks
-// ("NO_R" + "EPLY"). The silentHold gate must hold across chunks until the
-// segment proves it is no longer a NO_REPLY prefix (or stays one).
-func TestProcessInteractiveEvents_RichCard_NoReplyChunked(t *testing.T) {
-	starts, streams, updates, deletes := runRichCardSilentScenario(t, "chunked", []string{"NO_R", "EPLY"}, "NO_REPLY")
-	if len(starts) != 0 {
-		t.Fatalf("expected no SendPreviewStart, got %d: %v", len(starts), starts)
-	}
-	if len(streams) != 0 {
-		t.Fatalf("expected no StreamRichCardText, got %d: %v", len(streams), streams)
-	}
-	if len(updates) != 0 {
-		t.Fatalf("expected no UpdateMessage, got %d: %v", len(updates), updates)
-	}
-	if deletes != 0 {
-		t.Fatalf("expected no DeletePreviewMessage, got %d", deletes)
-	}
-}
-
-// TestProcessInteractiveEvents_RichCard_PrefixThenContent verifies that a
-// stream which starts with a NO_REPLY prefix ("N") but continues into real
-// content ("ote that...") releases the silentHold and lazily creates the
-// preview card with the accumulated content already in the body. No recall.
-func TestProcessInteractiveEvents_RichCard_PrefixThenContent(t *testing.T) {
-	starts, _, _, deletes := runRichCardSilentScenario(t, "prefix-then-content", []string{"N", "ote that the answer is 42"}, "Note that the answer is 42")
-	if len(starts) != 1 {
-		t.Fatalf("expected exactly 1 SendPreviewStart (lazy create after release), got %d: %v", len(starts), starts)
-	}
-	if !strings.Contains(starts[0], "Note that the answer is 42") {
-		t.Fatalf("lazy-created card should contain accumulated content, got %q", starts[0])
-	}
-	if deletes != 0 {
-		t.Fatalf("expected no DeletePreviewMessage, got %d", deletes)
-	}
-}
-
-// TestProcessInteractiveEvents_RichCard_TextThenNoReply_PreservesBody verifies
-// that when the agent emits visible text and then a trailing NO_REPLY marker
-// (engine sees EventResult.Content = "NO_REPLY", the dominant case for
-// claudecode where Content is the final assistant block), the card finalizes
-// with the pre-NO_REPLY text preserved instead of being blanked. Without this
-// the silent path's finalize-to-Done would overwrite the already-streamed body
-// with empty string, making the user's just-seen content "disappear".
-func TestProcessInteractiveEvents_RichCard_TextThenNoReply_PreservesBody(t *testing.T) {
-	p := &stubRichCardSilentPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-	})
-	sessionKey := "feishu:user-rich-text-then-noreply"
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-text-then-noreply")
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-text-then-noreply",
-	}
-	e.interactiveStates[sessionKey] = state
-
-	agentSession.events <- Event{Type: EventText, Content: "Hello world"}
-	agentSession.events <- Event{Type: EventText, Content: "\nNO_REPLY"}
-	agentSession.events <- Event{Type: EventResult, Content: "NO_REPLY", Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-text-then-noreply", time.Now(), nil, nil, state.replyCtx)
-	starts, _, updates, deletes := p.snapshot()
-
-	if len(starts) == 0 {
-		t.Fatalf("expected SendPreviewStart for the visible text chunk, got 0")
-	}
-	if deletes != 0 {
-		t.Fatalf("expected no DeletePreviewMessage, got %d", deletes)
-	}
-	if len(updates) == 0 {
-		t.Fatalf("expected at least one UpdateMessage (final Done finalize)")
-	}
-	last := updates[len(updates)-1]
-	if !strings.Contains(last, "Hello world") {
-		t.Fatalf("final card should preserve pre-NO_REPLY text, got %q", last)
-	}
-	if strings.Contains(last, "NO_REPLY") {
-		t.Fatalf("final card should not contain NO_REPLY marker, got %q", last)
-	}
-	if !strings.Contains(last, "status=done") {
-		t.Fatalf("final card should have status=done, got %q", last)
-	}
-}
-
-// TestProcessInteractiveEvents_RichCard_ToolThenNoReply verifies that when a
-// turn issues tool calls (creating the rich card with visible tool steps) and
-// then resolves to NO_REPLY, the card is finalized to Done — not deleted.
-// Deleting would leave a "撤回了一条消息" gray bar matched up with already-
-// visible tool activity. This mirrors legacy + full mode where tool messages
-// remain visible even when the final reply is silent.
-func TestProcessInteractiveEvents_RichCard_ToolThenNoReply(t *testing.T) {
-	p := &stubRichCardSilentPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
-	}
-	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-		ToolMessages:     true,
-	})
-	sessionKey := "feishu:user-rich-tool-then-noreply"
-	session := e.sessions.GetOrCreateActive(sessionKey)
-	agentSession := newControllableSession("s-rich-tool-then-noreply")
-	state := &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     "ctx-rich-tool-then-noreply",
-	}
-	e.interactiveStates[sessionKey] = state
-
-	code := 0
-	success := true
-	agentSession.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "echo hi"}
-	agentSession.events <- Event{Type: EventToolResult, ToolName: "Bash", ToolResult: "hi", ToolStatus: "completed", ToolExitCode: &code, ToolSuccess: &success}
-	agentSession.events <- Event{Type: EventText, Content: "NO_REPLY"}
-	agentSession.events <- Event{Type: EventResult, Content: "NO_REPLY", Done: true}
-
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-then-noreply", time.Now(), nil, nil, state.replyCtx)
-	starts, streams, updates, deletes := p.snapshot()
-
-	if len(starts) == 0 {
-		t.Fatalf("expected SendPreviewStart for tool card, got 0")
-	}
-	if len(streams) != 0 {
-		t.Fatalf("expected no StreamRichCardText (silentHold gates text path), got %d: %v", len(streams), streams)
-	}
-	if deletes != 0 {
-		t.Fatalf("expected no DeletePreviewMessage (tool card finalized in place), got %d", deletes)
-	}
-	if len(updates) == 0 {
-		t.Fatalf("expected at least one UpdateMessage (final Done finalize)")
-	}
-	last := updates[len(updates)-1]
-	if !strings.Contains(last, "status=done") {
-		t.Fatalf("final update should show status=done, got %q", last)
-	}
-	if strings.Contains(last, "NO_REPLY") {
-		t.Fatalf("finalize should not include NO_REPLY in body, got %q", last)
 	}
 }
 
@@ -2820,7 +2291,7 @@ func TestEngine_RateLimit_GlobalFallback(t *testing.T) {
 
 func TestSendPermissionPrompt_CardPlatform(t *testing.T) {
 	e := newTestEngine()
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 
 	e.sendPermissionPrompt(p, "ctx", "full prompt text", "write_file", "/tmp/test.txt")
 
@@ -2851,7 +2322,7 @@ func TestSendPermissionPrompt_CardPlatform(t *testing.T) {
 		t.Errorf("plain text should not be sent when card is used, got %v", p.sent)
 	}
 
-	// Verify Extra fields carry i18n labels and body for card callback updates
+	// Verify Extra fields carry labels and body for card callback updates
 	var allowBtn, denyBtn CardButton
 	for _, elem := range card.Elements {
 		if actions, ok := elem.(CardActions); ok {
@@ -3170,13 +2641,13 @@ func TestReplyWithCard_UsesCardSenderWhenSupported(t *testing.T) {
 }
 
 func TestReply_DoesNotTransformLocalReferencesWhenEnabled(t *testing.T) {
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "weixin"}
 	a := &namedStubModelModeAgent{name: "codex"}
 	e := NewEngine("test", a, []Platform{p}, "")
 	e.SetBaseWorkDir("/root/code/demo")
 	e.SetReferenceConfig(ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
@@ -3193,13 +2664,13 @@ func TestReply_DoesNotTransformLocalReferencesWhenEnabled(t *testing.T) {
 }
 
 func TestReplyWithCard_DoesNotTransformMarkdownOrFallback(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "weixin"}}
 	a := &namedStubModelModeAgent{name: "codex"}
 	e := NewEngine("test", a, []Platform{p}, "")
 	e.SetBaseWorkDir("/root/code/demo")
 	e.SetReferenceConfig(ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "basename",
 		MarkerStyle:     "ascii",
 		EnclosureStyle:  "code",
@@ -3500,7 +2971,7 @@ func TestCmdDelete_InvalidExplicitBatchSyntaxShowsUsage(t *testing.T) {
 	if len(agent.deleted) != 0 {
 		t.Fatalf("deleted = %v, want none", agent.deleted)
 	}
-	if len(p.sent) != 1 || p.sent[0] != e.i18n.T(MsgDeleteUsage) {
+	if len(p.sent) != 1 || p.sent[0] != "Usage: `/delete <number>` or `/delete 1,2,3` or `/delete 3-7` or `/delete 1,3-5,8`.\nUse `/list` to see session numbers." {
 		t.Fatalf("sent = %v, want usage", p.sent)
 	}
 }
@@ -3520,7 +2991,7 @@ func TestCmdDelete_WhitespaceSeparatedArgsAreRejected(t *testing.T) {
 	if len(agent.deleted) != 0 {
 		t.Fatalf("deleted = %v, want none", agent.deleted)
 	}
-	if len(p.sent) != 1 || p.sent[0] != e.i18n.T(MsgDeleteUsage) {
+	if len(p.sent) != 1 || p.sent[0] != "Usage: `/delete <number>` or `/delete 1,2,3` or `/delete 3-7` or `/delete 1,3-5,8`.\nUse `/list` to see session numbers." {
 		t.Fatalf("sent = %v, want usage", p.sent)
 	}
 }
@@ -3569,13 +3040,13 @@ func TestCmdDelete_SyncsLocalSessionSnapshot(t *testing.T) {
 }
 
 func TestCmdDelete_NoArgsOnCardPlatformShowsDeleteModeCard(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 
@@ -3592,13 +3063,13 @@ func TestCmdDelete_NoArgsOnCardPlatformShowsDeleteModeCard(t *testing.T) {
 }
 
 func TestDeleteMode_ToggleSelectionReturnsUpdatedCard(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	card := e.handleCardNav("act:/delete-mode toggle session-2", msg.SessionKey)
@@ -3619,14 +3090,14 @@ func TestDeleteMode_ToggleSelectionReturnsUpdatedCard(t *testing.T) {
 }
 
 func TestDeleteMode_ConfirmAndSubmitDeletesSelectedSessions(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 		{ID: "session-3", Summary: "Three"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	_ = e.handleCardNav("act:/delete-mode toggle session-1", msg.SessionKey)
@@ -3662,14 +3133,14 @@ func TestDeleteMode_ConfirmAndSubmitDeletesSelectedSessions(t *testing.T) {
 }
 
 func TestDeleteMode_SubmitReportsMissingSelectedSessions(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 		{ID: "session-3", Summary: "Three"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	_ = e.handleCardNav("act:/delete-mode toggle session-1", msg.SessionKey)
@@ -3701,13 +3172,13 @@ func TestDeleteMode_SubmitReportsMissingSelectedSessions(t *testing.T) {
 }
 
 func TestDeleteMode_CancelReturnsListCard(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	card := e.handleCardNav("act:/delete-mode cancel", msg.SessionKey)
@@ -3720,13 +3191,13 @@ func TestDeleteMode_CancelReturnsListCard(t *testing.T) {
 }
 
 func TestDeleteMode_ConfirmWithoutSelectionShowsHint(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	card := e.handleCardNav("act:/delete-mode confirm", msg.SessionKey)
@@ -3739,14 +3210,14 @@ func TestDeleteMode_ConfirmWithoutSelectionShowsHint(t *testing.T) {
 }
 
 func TestDeleteMode_PageNavigationPreservesSelection(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	sessions := make([]AgentSessionInfo, 0, 8)
 	for i := 1; i <= 8; i++ {
 		sessions = append(sessions, AgentSessionInfo{ID: fmt.Sprintf("session-%d", i), Summary: fmt.Sprintf("Session %d", i)})
 	}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: sessions}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	_ = e.handleCardNav("act:/delete-mode toggle session-1", msg.SessionKey)
@@ -3771,13 +3242,13 @@ func TestDeleteMode_PageNavigationPreservesSelection(t *testing.T) {
 }
 
 func TestDeleteMode_SubmitBlocksActiveSession(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 	e.sessions.GetOrCreateActive(msg.SessionKey).SetAgentSessionID("session-1", "test")
 
 	e.cmdDelete(p, msg, nil)
@@ -3801,13 +3272,13 @@ func TestDeleteMode_SubmitBlocksActiveSession(t *testing.T) {
 }
 
 func TestDeleteMode_ActiveSessionMarkedWithArrowAndNotSelectable(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 	// Register both sessions so they pass the owned-session filter.
 	s1 := e.sessions.GetOrCreateActive(msg.SessionKey)
 	s1.SetAgentSessionID("session-1", "test")
@@ -3836,14 +3307,14 @@ func TestDeleteMode_ActiveSessionMarkedWithArrowAndNotSelectable(t *testing.T) {
 }
 
 func TestDeleteMode_FormSubmitShowsConfirmThenDeletes(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
 		{ID: "session-1", Summary: "One"},
 		{ID: "session-2", Summary: "Two"},
 		{ID: "session-3", Summary: "Three"},
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "")
-	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
+	msg := &Message{SessionKey: "telegram:user1", ReplyCtx: "ctx"}
 
 	e.cmdDelete(p, msg, nil)
 	confirmCard := e.handleCardNav("act:/delete-mode form-submit session-1,session-3", msg.SessionKey)
@@ -3893,33 +3364,6 @@ func TestExecuteCardActionStop_RemovesInteractiveState(t *testing.T) {
 	}
 }
 
-func TestCmdProvider_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
-	p := &stubPlatformEngine{n: "plain"}
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{
-			{Name: "openai", BaseURL: "https://api.openai.com", Model: "gpt-4.1"},
-			{Name: "azure", BaseURL: "https://azure.example", Model: "gpt-4.1-mini"},
-		},
-		active: "openai",
-	}
-	e := NewEngine("test", agent, []Platform{p}, "")
-
-	e.cmdProvider(p, &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}, nil)
-
-	if len(p.sent) != 1 {
-		t.Fatalf("sent messages = %d, want 1", len(p.sent))
-	}
-	if !strings.Contains(p.sent[0], "Active provider") {
-		t.Fatalf("provider text = %q, want current provider section", p.sent[0])
-	}
-	if !strings.Contains(p.sent[0], "openai") || !strings.Contains(p.sent[0], "azure") {
-		t.Fatalf("provider text = %q, want provider list", p.sent[0])
-	}
-	if !strings.Contains(p.sent[0], "switch") {
-		t.Fatalf("provider text = %q, want switch hint", p.sent[0])
-	}
-}
-
 func TestCmdModel_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	p := &stubInlineButtonPlatform{stubPlatformEngine: stubPlatformEngine{n: "inline-only"}}
 	agent := &stubModelModeAgent{}
@@ -3932,50 +3376,6 @@ func TestCmdModel_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	}
 	if got := p.buttonRows[0][0].Data; got != "cmd:/model switch 1" {
 		t.Fatalf("first /model button = %q, want %q", got, "cmd:/model switch 1")
-	}
-}
-
-func TestCmdModel_UpdatesActiveProviderModel(t *testing.T) {
-	p := &stubPlatformEngine{n: "plain"}
-	agent := &stubModelModeAgent{
-		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
-		active: "openai",
-	}
-	e := NewEngine("test", agent, []Platform{p}, "")
-	var savedProvider, savedModel string
-	e.SetProviderModelSaveFunc(func(providerName, model string) error {
-		savedProvider = providerName
-		savedModel = model
-		return nil
-	})
-	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
-
-	s := e.sessions.GetOrCreateActive(msg.SessionKey)
-	s.SetAgentSessionID("existing-session", "test")
-
-	e.cmdModel(p, msg, []string{"switch", "gpt"})
-
-	if agent.model != "gpt-4.1" {
-		t.Fatalf("agent model = %q, want gpt-4.1", agent.model)
-	}
-	if got := agent.GetActiveProvider(); got == nil || got.Model != "gpt-4.1" {
-		t.Fatalf("active provider model = %#v, want gpt-4.1", got)
-	}
-	if got := agent.GetModel(); got != "gpt-4.1" {
-		t.Fatalf("GetModel() = %q, want gpt-4.1", got)
-	}
-	if savedProvider != "openai" || savedModel != "gpt-4.1" {
-		t.Fatalf("saved provider/model = %q/%q, want openai/gpt-4.1", savedProvider, savedModel)
-	}
-	if active := e.sessions.GetOrCreateActive(msg.SessionKey); active.AgentSessionID != "existing-session" {
-		t.Fatalf("session id = %q, want preserved after model switch", active.AgentSessionID)
 	}
 }
 
@@ -4037,48 +3437,10 @@ func TestCmdModel_LegacySyntaxStillWorks(t *testing.T) {
 	}
 }
 
-func TestCmdModel_SavesModelWhenNoActiveProvider(t *testing.T) {
-	p := &stubPlatformEngine{n: "plain"}
-	agent := &stubModelModeAgent{
-		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
-	}
-	e := NewEngine("test", agent, []Platform{p}, "")
-
-	var savedModel string
-	e.SetModelSaveFunc(func(model string) error {
-		savedModel = model
-		return nil
-	})
-
-	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
-	e.cmdModel(p, msg, []string{"switch", "gpt"})
-
-	if agent.model != "gpt-4.1" {
-		t.Fatalf("agent model = %q, want gpt-4.1", agent.model)
-	}
-	if savedModel != "gpt-4.1" {
-		t.Fatalf("saved model = %q, want gpt-4.1", savedModel)
-	}
-}
-
 func TestCmdModel_DoesNotClaimSuccessWhenModelSaveFails(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	agent := &stubModelModeAgent{
 		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
 	}
 	e := NewEngine("test", agent, []Platform{p}, "")
 	e.SetModelSaveFunc(func(model string) error {
@@ -4114,13 +3476,6 @@ func TestCmdModel_KeepHistoryPreservesSessionID(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	agent := &stubModelModeAgent{
 		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
 	}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -4516,120 +3871,6 @@ func TestCmdEffort_RejectsMinimal(t *testing.T) {
 	}
 }
 
-// TestSwitchProvider_PersistsToSession verifies that `/provider switch <name>`
-// records the choice on the Session so it survives a agent-bridge process
-// restart. Without this, the agent_session_id keeps the conversation alive
-// while the in-memory active provider reverts to default — see internal
-// task t-20260614-qp7xnl.
-func TestSwitchProvider_PersistsToSession(t *testing.T) {
-	p := &stubPlatformEngine{n: "plain"}
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "default-prov"}, {Name: "minimax"}},
-		active:    "default-prov",
-	}
-	e := NewEngine("test", agent, []Platform{p}, "")
-
-	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
-	s := e.sessions.GetOrCreateActive(msg.SessionKey)
-	s.SetAgentSessionID("agent-sess-1", "test")
-
-	e.cmdProvider(p, msg, []string{"switch", "minimax"})
-
-	if got := s.GetActiveProvider(); got != "minimax" {
-		t.Fatalf("session.ActiveProvider = %q, want %q", got, "minimax")
-	}
-	// switchProvider should also clear the agent_session_id (existing behavior).
-	if got := s.GetAgentSessionID(); got != "" {
-		t.Fatalf("session.AgentSessionID = %q, want cleared", got)
-	}
-}
-
-// TestProviderClear_ClearsSessionActiveProvider verifies `/provider clear`
-// also wipes the persisted choice so the next session starts with the
-// agent's default provider again.
-func TestProviderClear_ClearsSessionActiveProvider(t *testing.T) {
-	p := &stubPlatformEngine{n: "plain"}
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "default-prov"}, {Name: "minimax"}},
-		active:    "minimax",
-	}
-	e := NewEngine("test", agent, []Platform{p}, "")
-
-	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
-	s := e.sessions.GetOrCreateActive(msg.SessionKey)
-	s.SetActiveProvider("minimax")
-
-	e.cmdProvider(p, msg, []string{"clear"})
-
-	if got := s.GetActiveProvider(); got != "" {
-		t.Fatalf("after clear: session.ActiveProvider = %q, want empty", got)
-	}
-}
-
-// TestRestoreActiveProviderFromSession_AllPaths exercises every branch of the
-// restore helper: agent without ProviderSwitcher, empty session value, agent
-// already on the right provider (no-op), missing provider name (graceful
-// warning), and the happy path that fixes t-20260614-qp7xnl.
-func TestRestoreActiveProviderFromSession_AllPaths(t *testing.T) {
-	t.Run("agent without ProviderSwitcher is a no-op", func(t *testing.T) {
-		// stubAgent does not implement ProviderSwitcher.
-		s := &Session{ID: "s1", ActiveProvider: "minimax"}
-		// Must not panic.
-		restoreActiveProviderFromSession(&stubAgent{}, s)
-	})
-
-	t.Run("empty session.ActiveProvider leaves agent untouched", func(t *testing.T) {
-		agent := &stubProviderAgent{
-			providers: []ProviderConfig{{Name: "a"}, {Name: "b"}},
-			active:    "a",
-		}
-		s := &Session{ID: "s2"}
-		restoreActiveProviderFromSession(agent, s)
-		if agent.active != "a" {
-			t.Fatalf("agent.active = %q, want %q (untouched)", agent.active, "a")
-		}
-	})
-
-	t.Run("steady state: agent already on the right provider is a no-op", func(t *testing.T) {
-		agent := &stubProviderAgent{
-			providers: []ProviderConfig{{Name: "a"}, {Name: "b"}},
-			active:    "b",
-		}
-		s := &Session{ID: "s3", ActiveProvider: "b"}
-		restoreActiveProviderFromSession(agent, s)
-		if agent.active != "b" {
-			t.Fatalf("agent.active = %q, want %q", agent.active, "b")
-		}
-	})
-
-	t.Run("missing provider name is a graceful warning, not a panic", func(t *testing.T) {
-		agent := &stubProviderAgent{
-			providers: []ProviderConfig{{Name: "a"}},
-			active:    "a",
-		}
-		s := &Session{ID: "s4", ActiveProvider: "no-longer-exists"}
-		restoreActiveProviderFromSession(agent, s)
-		if agent.active != "a" {
-			t.Fatalf("agent.active = %q, want %q (unchanged on unknown provider)", agent.active, "a")
-		}
-	})
-
-	t.Run("post-restart restore: agent is rebound to the persisted provider", func(t *testing.T) {
-		// Simulates the t-20260614-qp7xnl scenario: process restarted, so
-		// in-memory activeIdx is at the default ("a"), but the session
-		// recorded that the user previously switched to "minimax".
-		agent := &stubProviderAgent{
-			providers: []ProviderConfig{{Name: "a"}, {Name: "minimax"}},
-			active:    "a",
-		}
-		s := &Session{ID: "s5", ActiveProvider: "minimax"}
-		restoreActiveProviderFromSession(agent, s)
-		if agent.active != "minimax" {
-			t.Fatalf("agent.active = %q, want %q (restored from session)", agent.active, "minimax")
-		}
-	})
-}
-
 func TestCmdMode_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	p := &stubInlineButtonPlatform{stubPlatformEngine: stubPlatformEngine{n: "inline-only"}}
 	agent := &stubModelModeAgent{}
@@ -4807,7 +4048,7 @@ func TestHandleMessage_PureAttachmentMessage_StagedNotSentToAgent(t *testing.T) 
 	if len(sent) != 1 {
 		t.Fatalf("sent = %v, want exactly one staged-attachment acknowledgment", sent)
 	}
-	if sent[0] != e.i18n.T(MsgAttachmentStaged) {
+	if sent[0] != "Got it — send your message and I'll include this." {
 		t.Fatalf("reply = %q, want MsgAttachmentStaged text", sent[0])
 	}
 	if len(agentSession.getSentPrompts()) != 0 {
@@ -4896,7 +4137,7 @@ func TestHandleMessage_PureAttachmentMessage_NotStagedWhenSessionBusy(t *testing
 	// Busy session must NOT acknowledge with the staging message.
 	sent := p.getSent()
 	for _, s := range sent {
-		if s == e.i18n.T(MsgAttachmentStaged) {
+		if s == "Got it — send your message and I'll include this." {
 			t.Fatalf("pure-attachment message staged while session busy: sent=%v", sent)
 		}
 	}
@@ -5304,7 +4545,7 @@ func TestBuildAskQuestionResponse(t *testing.T) {
 
 func TestSendAskQuestionPrompt_CardPlatform(t *testing.T) {
 	e := newTestEngine()
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	e.sendAskQuestionPrompt(p, "ctx", testQuestions(), 0)
 
 	if len(p.sentCards) != 1 {
@@ -5322,7 +4563,7 @@ func TestSendAskQuestionPrompt_CardPlatform(t *testing.T) {
 
 func TestSendAskQuestionPrompt_CardPlatform_MultiQuestion_ShowsIndex(t *testing.T) {
 	e := newTestEngine()
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	qs := testMultiQuestions()
 	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
 
@@ -5362,85 +4603,6 @@ func TestSendAskQuestionPrompt_PlainPlatform(t *testing.T) {
 	}
 	if !strings.Contains(msg, "1. **PostgreSQL**") {
 		t.Errorf("expected numbered options, got %s", msg)
-	}
-}
-
-func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersRichCardPrompt(t *testing.T) {
-	p := &stubAskQuestionRichCardPlatform{
-		stubCardPlatform: stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
-	}
-	sess := newBlockingSendSession("codex-ask-card")
-	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "")
-	e.SetDisplayConfig(DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ThinkingMaxLen:   defaultThinkingMaxLen,
-		ToolMaxLen:       defaultToolMaxLen,
-		ToolMessages:     true,
-	})
-
-	key := "test:chat:user1"
-	session := e.sessions.GetOrCreateActive(key)
-	state := &interactiveState{
-		agentSession: sess,
-		platform:     p,
-		replyCtx:     "ctx",
-	}
-	e.interactiveMu.Lock()
-	e.interactiveStates[key] = state
-	e.interactiveMu.Unlock()
-
-	sendDone := make(chan error, 1)
-	go func() {
-		sendDone <- sess.Send("prompt", "", nil, nil)
-	}()
-
-	done := make(chan struct{})
-	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "m-codex-ask-card", time.Now(), nil, sendDone, nil)
-		close(done)
-	}()
-
-	select {
-	case <-sess.sendStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Send did not reach blocking wait")
-	}
-
-	sess.events <- Event{
-		Type:         EventPermissionRequest,
-		RequestID:    `"rui-card"`,
-		ToolName:     "AskUserQuestion",
-		ToolInput:    `{"questions":[{"id":"database","question":"Which database?"}]}`,
-		ToolInputRaw: map[string]any{"questions": []any{map[string]any{"id": "database", "question": "Which database?"}}},
-		Questions:    testQuestions(),
-	}
-
-	card := waitForSentCard(t, &p.stubCardPlatform)
-	if card.Header == nil || card.Header.Color != "blue" {
-		t.Fatalf("card header = %#v, want blue AskUserQuestion card", card.Header)
-	}
-	if countCardActionValues(card, "askq:") != 3 {
-		t.Fatalf("askq button count = %d, want 3", countCardActionValues(card, "askq:"))
-	}
-
-	if !e.handlePendingPermission(p, &Message{
-		SessionKey: key,
-		UserID:     "user1",
-		Content:    "askq:0:2",
-		ReplyCtx:   "ctx",
-	}, "askq:0:2", key) {
-		t.Fatal("expected AskUserQuestion answer to resolve pending request")
-	}
-
-	close(sess.unblock)
-	sess.events <- Event{Type: EventResult, Content: "ok", Done: true}
-
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("processInteractiveEvents did not complete")
 	}
 }
 
@@ -5689,7 +4851,7 @@ func TestHandlePendingPermission_AskUserQuestion_SkipsPermFlow(t *testing.T) {
 //
 // The bug: fcb1beae routed extension_confirm through the AskUserQuestion
 // flow (populated Questions=[{Yes, No}] in forwardConfirm). That made the
-// engine render a Yes/No question card on Feishu instead of an Allow/Deny
+// engine render a Yes/No question card on Telegram instead of an Allow/Deny
 // permission card, breaking the UX for permission-gate and any other
 // extension that uses ctx.ui.confirm for permission decisions.
 func TestHandlePendingPermission_ExtensionConfirm_AllowIsPermissionAllow(t *testing.T) {
@@ -6621,7 +5783,6 @@ func TestResumeFailureFallbackToFreshSession(t *testing.T) {
 		agent:             agent,
 		sessions:          NewSessionManager(""),
 		ctx:               ctx,
-		i18n:              NewI18n(),
 		interactiveStates: make(map[string]*interactiveState),
 		display:           DisplayCfg{},
 	}
@@ -6661,7 +5822,6 @@ func TestFreshSessionWithoutSavedSessionIDStartsFresh(t *testing.T) {
 		agent:             agent,
 		sessions:          NewSessionManager(""),
 		ctx:               ctx,
-		i18n:              NewI18n(),
 		interactiveStates: make(map[string]*interactiveState),
 		display:           DisplayCfg{},
 	}
@@ -6696,7 +5856,6 @@ func TestWorkspaceReconnectWithSavedSessionIDUsesExactResume(t *testing.T) {
 		agent:             agent,
 		sessions:          NewSessionManager(""),
 		ctx:               ctx,
-		i18n:              NewI18n(),
 		interactiveStates: make(map[string]*interactiveState),
 		display:           DisplayCfg{},
 	}
@@ -7291,7 +6450,7 @@ func (p *replyCtxRecordingPlatform) recordedEvents() []replyCtxCall {
 // TestProcessInteractiveEvents_QueuedMessageUsesItsOwnReplyCtx verifies that
 // when a queued message is dequeued mid-loop, subsequent Send/Reply calls use
 // the queued message's reply context (not the original turn's). Without this,
-// platforms that derive the parent message_id from replyCtx (e.g. feishu Reply
+// platforms that derive the parent message_id from replyCtx (e.g. telegram Reply
 // API for the reply quote) would quote the wrong message.
 func TestProcessInteractiveEvents_QueuedMessageUsesItsOwnReplyCtx(t *testing.T) {
 	p := &replyCtxRecordingPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
@@ -7603,11 +6762,11 @@ func TestDrainOrphanedQueue_UsesWorkspaceSessionManager(t *testing.T) {
 // ── executeCardAction interactiveKey tests ───────────────────
 
 func TestHandleCardNav_ModelSwitchesAndRefreshesCard(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubModelModeAgent{model: "old"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
-	sessionKey := "feishu:channel1:user1"
+	sessionKey := "telegram:channel1:user1"
 	card := e.handleCardNav("act:/model new-model", sessionKey)
 	if card == nil {
 		t.Fatal("expected immediate result card")
@@ -7624,12 +6783,12 @@ func TestHandleCardNav_ModelSwitchesAndRefreshesCard(t *testing.T) {
 }
 
 func TestHandleCardNav_ModelSwitchFailureRefreshesCard(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubModelModeAgent{model: "old"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 	e.modelSaveFunc = func(string) error { return errors.New("save failed") }
 
-	sessionKey := "feishu:channel1:user1"
+	sessionKey := "telegram:channel1:user1"
 	card := e.handleCardNav("act:/model broken-model", sessionKey)
 	if card == nil {
 		t.Fatal("expected immediate failure card")
@@ -7647,7 +6806,7 @@ func TestHandleCardNav_ModelResultBackReturnsModelCard(t *testing.T) {
 	agent := &stubModelModeAgent{model: "gpt-5.4"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
-	sessionKey := "feishu:channel1:user1"
+	sessionKey := "telegram:channel1:user1"
 	result := e.renderModelSwitchResultCard("gpt-5.4", nil)
 	buttons := result.CollectButtons()
 	if len(buttons) != 1 || len(buttons[0]) != 1 {
@@ -7672,7 +6831,7 @@ func TestExecuteCardAction_ModeCleansUpWithInteractiveKey(t *testing.T) {
 	agent := &stubModelModeAgent{mode: "default"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
-	sessionKey := "feishu:channel1:user1"
+	sessionKey := "telegram:channel1:user1"
 
 	e.interactiveMu.Lock()
 	e.interactiveStates[sessionKey] = &interactiveState{}
@@ -7872,7 +7031,7 @@ func TestProcessInteractiveMessageWith_NilAgentSession_NoPanic(t *testing.T) {
 	if len(sent) == 0 {
 		t.Fatal("expected a failure reply on the platform, got none")
 	}
-	if !strings.Contains(sent[0], e.i18n.T(MsgFailedToStartAgentSession)) {
+	if !strings.Contains(sent[0], "Error: failed to start agent session") {
 		t.Fatalf("expected MsgFailedToStartAgentSession, got %q", sent[0])
 	}
 
@@ -7911,7 +7070,7 @@ func TestCmdCompact_NoCompressor_RepliesNotSupported(t *testing.T) {
 	if len(sent) == 0 {
 		t.Fatal("expected a reply")
 	}
-	if !strings.Contains(sent[0], e.i18n.T(MsgCompressNotSupported)) {
+	if !strings.Contains(sent[0], "This agent does not support context compaction.") {
 		t.Fatalf("expected MsgCompressNotSupported, got %q", sent[0])
 	}
 }
@@ -7928,7 +7087,7 @@ func TestCmdCompact_NoSession_RepliesNoSession(t *testing.T) {
 	if len(sent) == 0 {
 		t.Fatal("expected a reply")
 	}
-	if !strings.Contains(sent[0], e.i18n.T(MsgCompressNoSession)) {
+	if !strings.Contains(sent[0], "No active session to compact. Send a message first.") {
 		t.Fatalf("expected MsgCompressNoSession, got %q", sent[0])
 	}
 }
@@ -8012,7 +7171,7 @@ func TestCmdCompact_SessionBusy_RepliesPreviousProcessing(t *testing.T) {
 	sent := p.getSent()
 	found := false
 	for _, s := range sent {
-		if strings.Contains(s, e.i18n.T(MsgPreviousProcessing)) {
+		if strings.Contains(s, "Previous request still processing, please wait...") {
 			found = true
 			break
 		}
@@ -8065,7 +7224,7 @@ func TestCmdCompact_Success_SendsCompressDone(t *testing.T) {
 		sent := p.getSent()
 		foundDone := false
 		for _, s := range sent {
-			if strings.Contains(s, e.i18n.T(MsgCompressDone)) {
+			if strings.Contains(s, "Context compacted.") {
 				foundDone = true
 			}
 		}
@@ -8306,7 +7465,7 @@ func TestCmdStop_ReturnsWhileCloseBlockedAndStopsEventLoop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	sent := p.getSent()
-	if len(sent) != 1 || sent[0] != e.i18n.T(MsgExecutionStopped) {
+	if len(sent) != 1 || sent[0] != "Execution stopped." {
 		t.Fatalf("sent messages = %v, want only execution stopped", sent)
 	}
 
@@ -8449,7 +7608,7 @@ func TestHandleMessageBusyRecalledCurrentStopsAndProcessesNewMessage(t *testing.
 		t.Fatalf("sent = %v, want new message processed", sent)
 	}
 	for _, line := range sent {
-		if strings.Contains(line, e.i18n.T(MsgMessageQueued)) {
+		if strings.Contains(line, "Message received — will process after the current task finishes.") {
 			t.Fatalf("unexpected queued reply after recalled active message: %v", sent)
 		}
 	}
@@ -8504,11 +7663,11 @@ func TestHandleMessage_BusySessionWithCanceller_InterruptsInsteadOfQueueing(t *t
 	})
 
 	sent := waitForPlatformSend(p, 1, 3*time.Second)
-	if len(sent) != 1 || sent[0] != e.i18n.T(MsgSteering) {
+	if len(sent) != 1 || sent[0] != "Steering the current task with your new message…" {
 		t.Fatalf("sent = %v, want immediate steering acknowledgement", sent)
 	}
 	for _, line := range sent {
-		if strings.Contains(line, e.i18n.T(MsgMessageQueued)) || strings.Contains(line, e.i18n.T(MsgPreviousProcessing)) {
+		if strings.Contains(line, "Message received — will process after the current task finishes.") || strings.Contains(line, "Previous request still processing, please wait...") {
 			t.Fatalf("unexpected queue/busy reply after interrupt path: %v", sent)
 		}
 	}
@@ -8567,13 +7726,13 @@ func TestHandleMessage_PureAttachmentMessage_BusyCancellable_InsertedAsTurn(t *t
 	})
 
 	sent := waitForPlatformSend(p, 1, 3*time.Second)
-	if len(sent) != 1 || sent[0] != e.i18n.T(MsgSteering) {
+	if len(sent) != 1 || sent[0] != "Steering the current task with your new message…" {
 		t.Fatalf("sent = %v, want immediate steering acknowledgement", sent)
 	}
 	for _, line := range sent {
-		if strings.Contains(line, e.i18n.T(MsgAttachmentStaged)) ||
-			strings.Contains(line, e.i18n.T(MsgMessageQueued)) ||
-			strings.Contains(line, e.i18n.T(MsgPreviousProcessing)) {
+		if strings.Contains(line, "Got it — send your message and I'll include this.") ||
+			strings.Contains(line, "Message received — will process after the current task finishes.") ||
+			strings.Contains(line, "Previous request still processing, please wait...") {
 			t.Fatalf("unexpected staged/queue/busy reply after insert path: %v", sent)
 		}
 	}
@@ -8666,7 +7825,7 @@ func TestCmdStop_UsesInteractiveKeyForMultiWorkspace(t *testing.T) {
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 
 	wsDir := t.TempDir()
-	rawKey := "feishu:ch1:user1"
+	rawKey := "telegram:ch1:user1"
 	wsKey := wsDir + ":" + rawKey
 
 	iKey := e.interactiveKeyForSessionKey(wsKey)
@@ -8697,8 +7856,8 @@ func TestBuildSenderPrompt_Enabled(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildSenderPrompt("hello world", "user123", "Alice", "feishu", "feishu:channel42:user123", "")
-	expected := "[agent-bridge sender_id=user123 sender_name=\"Alice\" platform=feishu chat_id=channel42]\nhello world"
+	result := e.buildSenderPrompt("hello world", "user123", "Alice", "telegram", "telegram:channel42:user123", "")
+	expected := "[agent-bridge sender_id=user123 sender_name=\"Alice\" platform=telegram chat_id=channel42]\nhello world"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
 	}
@@ -8708,7 +7867,7 @@ func TestBuildSenderPrompt_Disabled(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(false)
 
-	result := e.buildSenderPrompt("hello", "user1", "Alice", "feishu", "feishu:ch:user1", "")
+	result := e.buildSenderPrompt("hello", "user1", "Alice", "telegram", "telegram:ch:user1", "")
 	if result != "hello" {
 		t.Fatalf("expected raw content when disabled, got %q", result)
 	}
@@ -8728,8 +7887,8 @@ func TestBuildSenderPrompt_EmptyUserName(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildSenderPrompt("hello", "user1", "", "feishu", "feishu:ch:user1", "")
-	expected := "[agent-bridge sender_id=user1 platform=feishu chat_id=ch]\nhello"
+	result := e.buildSenderPrompt("hello", "user1", "", "telegram", "telegram:ch:user1", "")
+	expected := "[agent-bridge sender_id=user1 platform=telegram chat_id=ch]\nhello"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
 	}
@@ -8751,7 +7910,7 @@ func TestExtractChannelID(t *testing.T) {
 		key  string
 		want string
 	}{
-		{"feishu:channel42:user1", "channel42"},
+		{"telegram:channel42:user1", "channel42"},
 		{"telegram:group123:user2", "group123"},
 		{"plain", ""},
 		{"a:b", "b"},
@@ -8759,10 +7918,9 @@ func TestExtractChannelID(t *testing.T) {
 		{"dingtalk:g:cidXXX:staff1", "cidXXX"},
 		{"dingtalk:d:cidYYY:staff2", "cidYYY"},
 		// 3-segment shared-session keys with single-char type tag — used by
-		// dingtalk/qq/qqbot when share_session_in_channel is enabled.
+		// dingtalk/qq when share_session_in_channel is enabled.
 		{"dingtalk:g:cidZZZ", "cidZZZ"},
 		{"qq:g:12345", "12345"},
-		{"qqbot:g:openid_abc", "openid_abc"},
 	}
 	for _, tt := range tests {
 		got := extractChannelID(tt.key)
@@ -8994,7 +8152,7 @@ func TestCmdShell_BlockedWithoutAdmin(t *testing.T) {
 	sent := p.getSent()
 	foundAdmin := false
 	for _, s := range sent {
-		if strings.Contains(s, e.i18n.T(MsgAdminRequired)[:10]) || strings.Contains(s, "admin") {
+		if strings.Contains(s, "Command `%s` requires admin privilege. Set `admin_from` in config to authorize users."[:10]) || strings.Contains(s, "admin") {
 			foundAdmin = true
 		}
 	}
@@ -9203,9 +8361,6 @@ func TestRunShellWithProgress_EmptyOutput(t *testing.T) {
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 
 	cmd := "true"
-	if runtime.GOOS == "windows" {
-		cmd = `cmd /c "exit /b 0"`
-	}
 	err := e.runShellWithProgress(p, "ctx", cmd, t.TempDir(), 5*time.Second, 4000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -9233,9 +8388,6 @@ func TestRunShellWithProgress_StderrOutput(t *testing.T) {
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 
 	cmd := "echo err >&2"
-	if runtime.GOOS == "windows" {
-		cmd = `cmd /c "echo err >&2"`
-	}
 	err := e.runShellWithProgress(p, "ctx", cmd, t.TempDir(), 5*time.Second, 4000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -9268,10 +8420,6 @@ func TestRunShellWithProgress_LongOutputTruncated(t *testing.T) {
 	// Generate output longer than maxOutput
 	cmd := "python3 -c 'print(\"x\" * 5000)'"
 	timeout := 5 * time.Second
-	if runtime.GOOS == "windows" {
-		cmd = `Write-Host ('x' * 5000)`
-		timeout = 15 * time.Second
-	}
 	err := e.runShellWithProgress(p, "ctx", cmd, t.TempDir(), timeout, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -9345,7 +8493,7 @@ func TestCmdDiff_BlockedWithoutAdmin(t *testing.T) {
 	sent := p.getSent()
 	foundAdmin := false
 	for _, s := range sent {
-		if strings.Contains(s, "admin") || strings.Contains(s, e.i18n.T(MsgAdminRequired)[:10]) {
+		if strings.Contains(s, "admin") || strings.Contains(s, "Command `%s` requires admin privilege. Set `admin_from` in config to authorize users."[:10]) {
 			foundAdmin = true
 		}
 	}
@@ -9599,7 +8747,7 @@ func TestHandleCommand_ShowRequiresAdmin(t *testing.T) {
 }
 
 func TestCmdShow_OutputRemainsRawWhenReferencesEnabled(t *testing.T) {
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 	agent := &stubWorkDirAgent{workDir: t.TempDir()}
 	e := NewEngine("test", agent, []Platform{p}, "")
 	e.SetAdminFrom("admin")
@@ -9625,7 +8773,7 @@ func TestCmdShow_OutputRemainsRawWhenReferencesEnabled(t *testing.T) {
 		Content:    "/show svc/handler.go",
 		ReplyCtx:   "ctx",
 		UserID:     "admin",
-		Platform:   "feishu",
+		Platform:   "telegram",
 	}
 	e.cmdShow(p, msg, []string{"svc/handler.go"})
 
@@ -9873,13 +9021,13 @@ func TestCmdWhoami_AliasMyID(t *testing.T) {
 }
 
 func TestCmdWhoami_CardPlatform(t *testing.T) {
-	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	agent := &stubModelModeAgent{model: "gpt-4.1", mode: "default"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
 	msg := &Message{
-		SessionKey: "feishu:chat999:ou_abc123",
-		Platform:   "feishu",
+		SessionKey: "telegram:chat999:ou_abc123",
+		Platform:   "telegram",
 		UserID:     "ou_abc123",
 		UserName:   "张三",
 		ReplyCtx:   "ctx",
@@ -9909,7 +9057,7 @@ func TestCmdWhoami_CardPlatform(t *testing.T) {
 	if !strings.Contains(text, "张三") {
 		t.Errorf("expected card to contain user name, got: %s", text)
 	}
-	if !strings.Contains(text, "feishu") {
+	if !strings.Contains(text, "telegram") {
 		t.Errorf("expected card to contain platform, got: %s", text)
 	}
 	if !strings.Contains(text, "chat999") {
@@ -9923,7 +9071,7 @@ func TestCmdWhoami_CardPlatform(t *testing.T) {
 
 func TestEngine_AddPlatform(t *testing.T) {
 	agent := &stubAgent{}
-	p1 := &stubPlatformEngine{n: "feishu"}
+	p1 := &stubPlatformEngine{n: "qq"}
 	p2 := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p1}, "")
@@ -9940,8 +9088,8 @@ func TestEngine_AddPlatform(t *testing.T) {
 		t.Fatalf("expected 2 platforms, got %d", len(e.platforms))
 	}
 
-	if e.platforms[0].Name() != "feishu" {
-		t.Errorf("expected first platform to be feishu, got %s", e.platforms[0].Name())
+	if e.platforms[0].Name() != "qq" {
+		t.Errorf("expected first platform to be qq, got %s", e.platforms[0].Name())
 	}
 	if e.platforms[1].Name() != "telegram" {
 		t.Errorf("expected second platform to be telegram, got %s", e.platforms[1].Name())
@@ -9950,7 +9098,7 @@ func TestEngine_AddPlatform(t *testing.T) {
 
 func TestEngine_GetAgent(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -9966,7 +9114,7 @@ func TestEngine_GetAgent(t *testing.T) {
 
 func TestEngine_ClearCommands(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -9993,7 +9141,7 @@ func TestEngine_ClearCommands(t *testing.T) {
 
 func TestEngine_SetAndGetAgent(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -10006,7 +9154,7 @@ func TestEngine_SetAndGetAgent(t *testing.T) {
 
 func TestEngine_AddCommand(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -10031,7 +9179,7 @@ func TestEngine_AddCommand(t *testing.T) {
 
 func TestEngine_AddAlias(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e := NewEngine("test", agent, []Platform{p}, "")
 
@@ -10094,141 +9242,14 @@ func TestEngineHistoryEntryMaxLen(t *testing.T) {
 	}
 }
 
-type recordingTTS struct {
-	mu    sync.Mutex
-	text  string
-	opts  TTSSynthesisOpts
-	calls int
-}
-
-func (t *recordingTTS) Synthesize(_ context.Context, text string, opts TTSSynthesisOpts) ([]byte, string, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.text = text
-	t.opts = opts
-	t.calls++
-	return []byte("audio-bytes"), "mp3", nil
-}
-
-func (t *recordingTTS) snapshot() (string, TTSSynthesisOpts, int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.text, t.opts, t.calls
-}
-
-type audioStubPlatform struct {
-	stubPlatformEngine
-	mu         sync.Mutex
-	audio      []byte
-	format     string
-	audioCalls int
-}
-
-func (p *audioStubPlatform) SendAudio(_ context.Context, _ any, audio []byte, format string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.audio = append([]byte(nil), audio...)
-	p.format = format
-	p.audioCalls++
-	return nil
-}
-
-func (p *audioStubPlatform) audioSnapshot() ([]byte, string, int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]byte(nil), p.audio...), p.format, p.audioCalls
-}
-
-func TestSynthesizedTTSReply_PropagatesSpeed(t *testing.T) {
-	tts := &recordingTTS{}
-	p := &audioStubPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
-	e := NewEngine("assistant", &stubAgent{}, []Platform{p}, "")
-	e.SetTTSConfig(&TTSCfg{Enabled: true, Voice: "voice-b", Speed: 1.06, TTS: tts})
-
-	if err := e.synthesizeAndSendTTS(p, "ctx", "hello"); err != nil {
-		t.Fatalf("synthesizeAndSendTTS() error = %v", err)
-	}
-	_, opts, calls := tts.snapshot()
-	if calls != 1 {
-		t.Fatalf("tts calls = %d, want 1", calls)
-	}
-	if opts.Speed != 1.06 {
-		t.Fatalf("speed = %v, want 1.06", opts.Speed)
-	}
-}
-
-func TestSynthesizedTTSReply_ErrorWhenTTSDisabled(t *testing.T) {
-	p := &audioStubPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
-	e := NewEngine("assistant", &stubAgent{}, []Platform{p}, "")
-	e.SetTTSConfig(&TTSCfg{Enabled: false, TTS: &recordingTTS{}})
-
-	err := e.synthesizeAndSendTTS(p, "ctx", "hello")
-	if err == nil || !strings.Contains(err.Error(), "tts is not configured") {
-		t.Fatalf("error = %v, want tts is not configured", err)
-	}
-}
-
-func TestSynthesizedTTSReply_ErrorWhenProviderMissing(t *testing.T) {
-	p := &audioStubPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
-	e := NewEngine("assistant", &stubAgent{}, []Platform{p}, "")
-	e.SetTTSConfig(&TTSCfg{Enabled: true})
-
-	err := e.synthesizeAndSendTTS(p, "ctx", "hello")
-	if err == nil || !strings.Contains(err.Error(), "tts provider is not configured") {
-		t.Fatalf("error = %v, want tts provider is not configured", err)
-	}
-}
-
-func TestSynthesizedTTSReply_ErrorWhenPlatformCannotSendAudio(t *testing.T) {
-	tts := &recordingTTS{}
-	p := &stubPlatformEngine{n: "discord"}
-	e := NewEngine("assistant", &stubAgent{}, []Platform{p}, "")
-	e.SetTTSConfig(&TTSCfg{Enabled: true, TTS: tts})
-
-	err := e.synthesizeAndSendTTS(p, "ctx", "hello")
-	if err == nil || !strings.Contains(err.Error(), "platform discord does not support audio sending") {
-		t.Fatalf("error = %v, want unsupported audio sender error", err)
-	}
-	_, _, calls := tts.snapshot()
-	if calls != 0 {
-		t.Fatalf("tts calls = %d, want 0", calls)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Engine setter method coverage tests
 // ---------------------------------------------------------------------------
 
 func TestEngine_SetterMethods(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 	e := NewEngine("test", agent, []Platform{p}, "")
-
-	// Test SetSpeechConfig
-	e.SetSpeechConfig(SpeechCfg{Enabled: true})
-
-	// Test SetTTSConfig
-	e.SetTTSConfig(&TTSCfg{Voice: "voice-1"})
-
-	// Test SetTTSSaveFunc (just verify it doesn't panic)
-	e.SetTTSSaveFunc(func(text string) error {
-		return nil
-	})
-
-	// Test SetProviderSaveFunc
-	e.SetProviderSaveFunc(func(providerName string) error {
-		return nil
-	})
-
-	// Test SetProviderAddSaveFunc
-	e.SetProviderAddSaveFunc(func(cfg ProviderConfig) error {
-		return nil
-	})
-
-	// Test SetProviderRemoveSaveFunc
-	e.SetProviderRemoveSaveFunc(func(name string) error {
-		return nil
-	})
 
 	// Test SetCommandSaveAddFunc
 	e.SetCommandSaveAddFunc(func(name, desc, prompt, exec, workDir string) error {
@@ -10271,7 +9292,7 @@ func TestEngine_SetterMethods(t *testing.T) {
 
 func TestEngine_SetUserRoles(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
 	mgr := NewUserRoleManager()
@@ -10296,7 +9317,7 @@ func TestEngine_SetUserRoles(t *testing.T) {
 
 func TestEngine_SetStreamPreviewCfg(t *testing.T) {
 	agent := &stubAgent{}
-	p := &stubPlatformEngine{n: "feishu"}
+	p := &stubPlatformEngine{n: "telegram"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 
 	cfg := StreamPreviewCfg{Enabled: true, IntervalMs: 1000, MinDeltaChars: 10}
@@ -10312,7 +9333,7 @@ func TestEngine_SetStreamPreviewCfg(t *testing.T) {
 
 func TestEngine_AddPlatform_Multiple(t *testing.T) {
 	agent := &stubAgent{}
-	p1 := &stubPlatformEngine{n: "feishu"}
+	p1 := &stubPlatformEngine{n: "qq"}
 	e := NewEngine("test", agent, []Platform{p1}, "")
 
 	p2 := &stubPlatformEngine{n: "telegram"}
@@ -10430,7 +9451,7 @@ func TestHandleMessage_InstantReply_SendsConfirmationWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_InstantReply_UsesDefaultI18nWhenContentEmpty(t *testing.T) {
+func TestHandleMessage_InstantReply_UsesDefaultTextWhenContentEmpty(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
 	agentSession := newResultAgentSession("agent reply")
 	agent := &resultAgent{session: agentSession}
@@ -10463,7 +9484,7 @@ func TestHandleMessage_InstantReply_UsesDefaultI18nWhenContentEmpty(t *testing.T
 
 	sent := p.getSent()
 	if sent[0] != "Processing..." {
-		t.Fatalf("first reply = %q, want i18n default 'Processing...'", sent[0])
+		t.Fatalf("first reply = %q, want default 'Processing...'", sent[0])
 	}
 }
 
@@ -11190,7 +10211,7 @@ func TestCouldBeSilentPrefix(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration tests for /list visibility after /new and provider switches
+// Integration tests for /list visibility after /new and session resets
 // ---------------------------------------------------------------------------
 
 // TestCmdList_AllSessionsVisibleAfterRepeatedNew verifies that /list shows ALL
@@ -11242,7 +10263,7 @@ func TestCmdList_AllSessionsVisibleAfterRepeatedNew(t *testing.T) {
 }
 
 // TestCmdList_AllSessionsVisibleAfterResetAllSessions simulates a management
-// API provider switch (resetAllSessions) followed by creating a new session.
+// session reset (resetAllSessions) followed by creating a new session.
 // All previously tracked sessions must remain visible in /list.
 func TestCmdList_AllSessionsVisibleAfterResetAllSessions(t *testing.T) {
 	base := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
@@ -11377,54 +10398,6 @@ func TestRenderListCard_AllSessionsVisibleAfterRepeatedNew(t *testing.T) {
 	}
 }
 
-// TestCmdList_ProviderSwitchThenNewDoesNotHideSessions simulates the full
-// real-world scenario: user has sessions → switches provider → creates new
-// sessions → all sessions (old and new) must remain visible.
-func TestCmdList_ProviderSwitchThenNewDoesNotHideSessions(t *testing.T) {
-	base := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
-	allAgentSessions := []AgentSessionInfo{
-		{ID: "old-1", Summary: "Before switch 1", MessageCount: 5, ModifiedAt: base},
-		{ID: "old-2", Summary: "Before switch 2", MessageCount: 3, ModifiedAt: base.Add(time.Hour)},
-		{ID: "new-1", Summary: "After switch 1", MessageCount: 2, ModifiedAt: base.Add(2 * time.Hour)},
-		{ID: "new-2", Summary: "After switch 2", MessageCount: 1, ModifiedAt: base.Add(3 * time.Hour)},
-	}
-	agent := &stubListAgent{sessions: allAgentSessions}
-	p := &stubPlatformEngine{n: "plain"}
-	e := NewEngine("test", agent, []Platform{p}, "")
-	userKey := "test:user1"
-
-	for _, as := range allAgentSessions[:2] {
-		s := e.sessions.NewSession(userKey, "")
-		s.SetAgentSessionID(as.ID, "codex")
-	}
-	e.sessions.Save()
-
-	e.resetAllSessions()
-
-	for i, as := range allAgentSessions[2:] {
-		if i > 0 {
-			old := e.sessions.GetOrCreateActive(userKey)
-			old.SetAgentSessionID("", "")
-		}
-		s := e.sessions.NewSession(userKey, "")
-		s.SetAgentSessionID(as.ID, "codex")
-	}
-	e.sessions.Save()
-
-	p.sent = nil
-	msg := &Message{SessionKey: userKey, ReplyCtx: "ctx"}
-	e.cmdList(p, msg, nil)
-
-	if len(p.sent) != 1 {
-		t.Fatalf("expected 1 reply, got %d", len(p.sent))
-	}
-	for _, as := range allAgentSessions {
-		if !strings.Contains(p.sent[0], as.Summary) {
-			t.Errorf("/list missing %q after provider switch + new:\n%s", as.Summary, p.sent[0])
-		}
-	}
-}
-
 // TestCmdList_RealWorldLegacyDataFullFlow is a precise reproduction of the
 // user-reported bug using data shaped exactly like the real qa-release project:
 //   - 15 internal sessions, 14 with lost AgentSessionIDs (old code damage)
@@ -11460,8 +10433,8 @@ func TestCmdList_RealWorldLegacyDataFullFlow(t *testing.T) {
 			"s14": {"id":"s14","name":"今天",       "agent_session_id":"", "history":null, "created_at":"2026-04-20T21:44:58Z", "updated_at":"2026-04-20T21:44:58Z"},
 			"s15": {"id":"s15","name":"新的会话",   "agent_session_id":"019dab28-1a0f-7f60-87ed-b4fda306ebef", "agent_type":"codex", "history":null, "created_at":"2026-04-20T21:50:14Z", "updated_at":"2026-04-20T21:50:14Z"}
 		},
-		"active_session": {"feishu:chat:user1":"s15"},
-		"user_sessions":  {"feishu:chat:user1":["s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15"]},
+		"active_session": {"telegram:chat:user1":"s15"},
+		"user_sessions":  {"telegram:chat:user1":["s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15"]},
 		"counter": 15
 	}`
 	if err := os.WriteFile(sessPath, []byte(legacyJSON), 0o644); err != nil {
@@ -11486,7 +10459,7 @@ func TestCmdList_RealWorldLegacyDataFullFlow(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	e := NewEngine("test", agent, []Platform{p}, "")
 	e.sessions = NewSessionManager(sessPath) // load real data
-	userKey := "feishu:chat:user1"
+	userKey := "telegram:chat:user1"
 	msg := &Message{SessionKey: userKey, ReplyCtx: "ctx"}
 
 	// ── Step 1: /list on startup ───────────────────────────────
@@ -12144,7 +11117,7 @@ func TestMaybeAutoResetSessionOnIdle_NotFiredWhenUserActivityRecent(t *testing.T
 
 // TestHandlePendingPermission_StalePermissionCallback_Dropped verifies that
 // permission-callback messages synthesized by inline-button / card-action paths
-// (Telegram callback_query, Feishu card_action, QQBot interaction button, and
+// (Telegram callback_query and
 // the bridge web admin card_action) are silently dropped when there is no
 // matching interactive state or pending request — instead of letting the
 // literal "allow" / "deny" string reach the agent's prompt stream. Plain
@@ -12503,7 +11476,7 @@ func (p *audioVideoStubPlatform) SendVideo(_ context.Context, _ any, video []byt
 }
 
 func TestSendAudiosToSession_RoutesToSendAudio_NotSendFile(t *testing.T) {
-	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}}
+	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 	e.interactiveStates["session-audio"] = &interactiveState{platform: p, replyCtx: "ctx"}
 
@@ -12569,7 +11542,7 @@ func TestSendAudiosToSession_PlatformWithNeitherSender_Errors(t *testing.T) {
 }
 
 func TestSendAudiosToSession_DisabledByConfig(t *testing.T) {
-	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}}
+	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 	e.SetAttachmentSendEnabled(false)
 	e.interactiveStates["session-audio-off"] = &interactiveState{platform: p, replyCtx: "ctx"}
@@ -12586,7 +11559,7 @@ func TestSendAudiosToSession_DisabledByConfig(t *testing.T) {
 }
 
 func TestSendVideosToSession_RoutesToSendVideo_NotSendFile(t *testing.T) {
-	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}}
+	p := &audioVideoStubPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "")
 	e.interactiveStates["session-video"] = &interactiveState{platform: p, replyCtx: "ctx"}
 

@@ -102,12 +102,6 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 			}
 			i++
 			req.WorkDir = args[i]
-		case "--tts":
-			if i+1 >= len(args) {
-				return req, "", fmt.Errorf("%s requires a value", args[i])
-			}
-			i++
-			req.TTSText = args[i]
 		case "--image":
 			if i+1 >= len(args) {
 				return req, "", fmt.Errorf("--image requires a path")
@@ -173,15 +167,15 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 	// Keep audio / video clips on dedicated fields. Routing them through
 	// req.Files would force the engine to dispatch them via FileSender —
 	// that loses the native voice-bubble / video-bubble path on platforms
-	// that implement AudioSender / VideoSender (e.g. Feishu's ffmpeg
+	// that implement AudioSender / VideoSender (e.g. an ffmpeg
 	// transcode for mp3 → opus). See agent-bridge internal task
 	// t-20260615-cqjbk1.
 	req.Files = files
 	req.Audios = audioFiles
 	req.Videos = videoFiles
 
-	if req.TTSText == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
-		return req, "", fmt.Errorf("an attachment (--image/--file/--audio/--video) or --tts text is required")
+	if len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
+		return req, "", fmt.Errorf("an attachment (--image/--file/--audio/--video) is required")
 	}
 	if req.Message != "" && len(req.Images) == 0 && len(req.Files) == 0 {
 		return req, "", fmt.Errorf("--message must accompany --image or --file; plain text sends are not supported")
@@ -333,9 +327,8 @@ func printSendUsage() {
        agent-bridge send [options] --file <path>
        agent-bridge send [options] --audio <path>
        agent-bridge send [options] --video <path>
-       agent-bridge send [options] --tts <text>
 
-Send attachments or a synthesized voice message to an active agent-bridge session.
+Send attachments to an active agent-bridge session.
 Text-only messages are not supported; reply with text directly instead.
 
 Options:
@@ -344,7 +337,6 @@ Options:
       --file <path>        Send a file attachment (repeatable)
       --audio <path>       Send an audio attachment (repeatable)
       --video <path>       Send a video attachment (repeatable)
-      --tts <text>         Synthesize text and send it as a voice/audio message
       --cwd <path>         Start a new session in this working directory
       --work-dir <path>    Alias for --cwd
   -p, --project <name>     Target project (optional if only one project)
@@ -357,6 +349,5 @@ Examples:
   agent-bridge send -m "Chart generated" --image /tmp/chart.png
   agent-bridge send --file /tmp/report.pdf
   agent-bridge send --video /tmp/demo.mp4
-  agent-bridge send --audio /tmp/voice.opus
-  agent-bridge send --tts "Hello from agent-bridge"`)
+  agent-bridge send --audio /tmp/voice.opus`)
 }

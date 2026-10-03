@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { slashCommands } from './CommandPalette';
@@ -157,13 +156,12 @@ function ElementRenderer({ el, onAction }: { el: any; onAction?: (v: string) => 
 }
 
 export default function CommandResultPanel({ result, onClose, onCardAction }: Props) {
-  const { t } = useTranslation();
 
   if (!result) return null;
 
   const cmdDef = slashCommands.find(c => c.cmd === result.command);
   const Icon = cmdDef?.icon;
-  const label = cmdDef ? t(cmdDef.labelKey) : result.command;
+  const label = cmdDef ? cmdDef.label : result.command;
 
   return (
     <>

@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { MessageSquare, Circle, Filter, User, Bot } from 'lucide-react';
 import { Badge, EmptyState } from '@/components/ui';
@@ -11,11 +10,11 @@ interface FlatSession extends Session {
   _project: string;
 }
 
-function timeAgo(iso: string, t: (k: string) => string): string {
+function timeAgo(iso: string): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return t('sessions.justNow');
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
@@ -24,7 +23,6 @@ function timeAgo(iso: string, t: (k: string) => string): string {
 }
 
 export default function SessionList() {
-  const { t } = useTranslation();
   const [allData, setAllData] = useState<{ project: string; sessions: Session[] }[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>('');
@@ -81,18 +79,18 @@ export default function SessionList() {
           onChange={(e) => setSelectedProject(e.target.value)}
           className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent/50"
         >
-          <option value="">{t('sessions.allProjects')}</option>
+          <option value="">{"All projects"}</option>
           {projects.map((p) => (
             <option key={p.name} value={p.name}>{p.name}</option>
           ))}
         </select>
         <span className="text-xs text-gray-400">
-          {filtered.length} {t('nav.sessions').toLowerCase()}
+          {filtered.length} {"Sessions".toLowerCase()}
         </span>
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyState message={t('sessions.noSessions')} icon={MessageSquare} />
+        <EmptyState message={"No sessions"} icon={MessageSquare} />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
           {filtered.map((s) => (
@@ -113,7 +111,7 @@ export default function SessionList() {
                     {s.live && <Circle size={5} className="fill-emerald-500 text-emerald-500 shrink-0" />}
                   </div>
                   <span className="text-[10px] text-gray-400 shrink-0 mt-0.5">
-                    {timeAgo(s.updated_at || s.created_at, t)}
+                    {timeAgo(s.updated_at || s.created_at)}
                   </span>
                 </div>
 
@@ -129,7 +127,7 @@ export default function SessionList() {
                       {s.last_message.content.replace(/\n/g, ' ').slice(0, 100)}
                     </p>
                   ) : (
-                    <p className="text-xs text-gray-400 dark:text-gray-500 italic">{t('sessions.noMessages')}</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 italic">{"No messages yet"}</p>
                   )}
                 </div>
 

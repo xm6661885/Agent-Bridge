@@ -150,8 +150,6 @@ type appServerSession struct {
 	model          string
 	effort         string
 	mode           string
-	baseURL        string
-	modelProvider  string
 	extraEnv       []string
 	codexHome      string
 	promptPreamble string
@@ -203,7 +201,7 @@ const (
 	appServerUsageRefreshTimeout = 1500 * time.Millisecond
 )
 
-func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode, resumeID, baseURL, modelProvider string, extraEnv []string, codexHome string, systemPrompt string, appendPrompt string) (*appServerSession, error) {
+func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode, resumeID string, extraEnv []string, codexHome string, systemPrompt string, appendPrompt string) (*appServerSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	s := &appServerSession{
 		url:              url,
@@ -211,8 +209,6 @@ func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode,
 		model:            model,
 		effort:           effort,
 		mode:             mode,
-		baseURL:          baseURL,
-		modelProvider:    modelProvider,
 		extraEnv:         append([]string(nil), extraEnv...),
 		codexHome:        strings.TrimSpace(codexHome),
 		promptPreamble:   buildCodexPromptPreamble(systemPrompt, appendPrompt),
@@ -256,12 +252,6 @@ func (s *appServerSession) connect() error {
 	}
 	if effort := strings.TrimSpace(s.effort); effort != "" {
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
-	}
-	if provider := strings.TrimSpace(s.modelProvider); provider != "" {
-		args = append(args, "-c", fmt.Sprintf("model_provider=%q", provider))
-	}
-	if baseURL := strings.TrimSpace(s.baseURL); baseURL != "" {
-		args = append(args, "-c", fmt.Sprintf("openai_base_url=%q", baseURL))
 	}
 	cmd := exec.CommandContext(s.ctx, "codex", args...)
 	cmd.Dir = s.workDir

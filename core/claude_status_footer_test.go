@@ -241,7 +241,6 @@ func newLegacyFooterEngine() *Engine {
 
 func TestBuildReplyFooter_LegacyAllSegments(t *testing.T) {
 	e := newLegacyFooterEngine()
-	e.i18n = NewI18n()
 	agent := &stubFooterAgent{model: "gpt-5.4", effort: "xhigh", workDir: "/tmp/ws"}
 	got := e.buildReplyFooter(agent, nil, "/tmp/ws", "100% left")
 	wantSubs := []string{"gpt-5.4", "xhigh", "100% left", "ws"}
@@ -274,7 +273,6 @@ func TestCompactReplyFooterPath_HomeRelativeDeepPathStaysFull(t *testing.T) {
 func TestBuildReplyFooter_LegacyHidesContextSegments(t *testing.T) {
 	e := newLegacyFooterEngine()
 	e.SetShowContextIndicator(false)
-	e.i18n = NewI18n()
 	agent := &stubFooterAgent{model: "gpt-5.4", effort: "xhigh", workDir: "/tmp/ws"}
 	// With model/effort/contextLeft all suppressed, only cwd would remain —
 	// and a workdir-only footer is suppressed entirely (regression #701).
@@ -286,7 +284,6 @@ func TestBuildReplyFooter_LegacyHidesContextSegments(t *testing.T) {
 func TestBuildReplyFooter_LegacyHidesWorkdirSegment(t *testing.T) {
 	e := newLegacyFooterEngine()
 	e.SetShowWorkdirIndicator(false)
-	e.i18n = NewI18n()
 	agent := &stubFooterAgent{model: "gpt-5.4", effort: "xhigh", workDir: "/tmp/ws"}
 	got := e.buildReplyFooter(agent, nil, "/tmp/ws", "100% left")
 	if got == "" {
@@ -305,7 +302,6 @@ func TestBuildReplyFooter_LegacyHidesWorkdirSegment(t *testing.T) {
 func TestBuildReplyFooter_LegacyMasterToggleOff(t *testing.T) {
 	e := newLegacyFooterEngine()
 	e.SetReplyFooterEnabled(false)
-	e.i18n = NewI18n()
 	agent := &stubFooterAgent{model: "gpt-5.4", effort: "xhigh", workDir: "/tmp/ws"}
 	if got := e.buildReplyFooter(agent, nil, "/tmp/ws", "100% left"); got != "" {
 		t.Errorf("reply_footer=false must short-circuit, got %q", got)

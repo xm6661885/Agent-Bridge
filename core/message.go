@@ -319,7 +319,7 @@ func absolutizeAll(paths []string) []string {
 // BuildAttachmentNote returns a short, LLM-directed sentence describing N
 // saved attachments by path (e.g. "User sent an image. Path: ..." or "User
 // sent 3 files. Paths: ..."). This text is never shown to the human user, so
-// it is not run through i18n — matches the existing plain-English convention
+// it is plain English — matches the existing plain-English convention
 // used throughout this file for agent-directed scaffolding text.
 func BuildAttachmentNote(kind string, paths []string) string {
 	if len(paths) == 0 {
@@ -332,7 +332,7 @@ func BuildAttachmentNote(kind string, paths []string) string {
 }
 
 // ExtFromMime maps an image MIME type to a file extension. Attachments that
-// arrive without a filename (Feishu image messages carry only bytes + MIME)
+// arrive without a filename (some platforms send only bytes + MIME)
 // must still land on disk with a usable extension, otherwise downstream agents
 // have to guess the format from the bytes.
 func ExtFromMime(mime string) string {
@@ -364,14 +364,6 @@ func AppendImageRefs(prompt string, imagePaths []string) string {
 	return prompt + "\n\n" + note
 }
 
-// AudioAttachment represents a voice/audio message sent by the user.
-type AudioAttachment struct {
-	MimeType string // e.g. "audio/amr", "audio/ogg", "audio/mp4"
-	Data     []byte // raw audio bytes
-	Format   string // short format hint: "amr", "ogg", "m4a", "mp3", "wav", etc.
-	Duration int    // duration in seconds (if known)
-}
-
 // LocationAttachment represents a geographical location sent by the user.
 type LocationAttachment struct {
 	Latitude             float64 // latitude coordinate
@@ -384,7 +376,7 @@ type LocationAttachment struct {
 
 // Message represents a unified incoming message from any platform.
 type Message struct {
-	SessionKey string // unique key for user context, e.g. "feishu:{chatID}:{userID}"
+	SessionKey string // unique key for user context, e.g. "telegram:{chatID}:{userID}"
 	// SerialKey optionally places this message in a FIFO shared with other
 	// messages bearing the same key. It is intended for transports that need
 	// ordering across otherwise independent user sessions (for example, a
@@ -400,18 +392,16 @@ type Message struct {
 	Content      string
 	Images       []ImageAttachment   // attached images (if any)
 	Files        []FileAttachment    // attached files (if any)
-	Audio        *AudioAttachment    // voice message (if any)
 	Location     *LocationAttachment // geographical location (if any)
 	ExtraContent string              // platform-enriched content (e.g. location text, reply quote) prepended for the agent
 	OnAccepted   func()              // called once when the engine accepts this message for an agent turn
 	ChannelKey   string              // platform-provided channel identifier, e.g. chat:topic (optional)
 	ReplyCtx     any                 // platform-specific context needed for replying
-	FromVoice    bool                // true if message originated from voice transcription
 	ModeOverride string              // if set, temporarily override agent permission mode for this message
 	// IsPermissionResponse is set by inline-button / card-action paths in
 	// platforms when a synthesized message is forwarded as a permission
 	// decision (e.g. Telegram handleCallbackQuery for perm:allow/deny,
-	// Feishu onCardAction, QQBot interaction button, bridge card_action).
+	// bridge card_action).
 	// The engine uses this flag to drop STALE callbacks silently when no
 	// matching pending request exists, instead of letting the literal
 	// "allow"/"deny" string reach the agent prompt stream. Plain text
@@ -419,7 +409,7 @@ type Message struct {
 	// continue to flow through the regular message handler.
 	IsPermissionResponse bool
 	// UserMessageTimeMs is the platform message creation time in Unix milliseconds
-	// when known (e.g. Feishu im.message.message_received create_time). Used to
+	// when known (platform-provided create time). Used to
 	// drop late redeliveries that reuse a new message_id but an older create_time
 	// than a message already processed. Zero means unset (no ordering hint).
 	UserMessageTimeMs int64

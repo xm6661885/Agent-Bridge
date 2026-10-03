@@ -58,8 +58,6 @@ func testManagementServer(t *testing.T, token string) (*ManagementServer, *httpt
 	mux.HandleFunc(prefix+"/agents", mgmt.wrap(mgmt.handleAgents))
 	mux.HandleFunc(prefix+"/projects", mgmt.wrap(mgmt.handleProjects))
 	mux.HandleFunc(prefix+"/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	mux.HandleFunc(prefix+"/providers", mgmt.wrap(mgmt.handleGlobalProviders))
-	mux.HandleFunc(prefix+"/providers/", mgmt.wrap(mgmt.handleGlobalProviderRoutes))
 	mux.HandleFunc(prefix+"/bridge/adapters", mgmt.wrap(mgmt.handleBridgeAdapters))
 
 	ts := httptest.NewServer(mux)
@@ -566,69 +564,14 @@ func TestMgmt_MethodNotAllowed(t *testing.T) {
 	resp.Body.Close()
 }
 
-func TestMgmt_ProjectModel_UsesSwitchModelWithActiveProvider(t *testing.T) {
+func TestMgmt_ProjectModel_SavesModel(t *testing.T) {
 	agent := &stubModelModeAgent{
 		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
-		active: "openai",
-	}
-	e := NewEngine("test-project", agent, nil, "")
-	var savedProvider, savedModel string
-	e.SetProviderModelSaveFunc(func(providerName, model string) error {
-		savedProvider = providerName
-		savedModel = model
-		return nil
-	})
-
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("test-project", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPost(t, ts.URL+"/api/v1/projects/test-project/model", "tok", map[string]string{"model": "gpt-4.1"})
-	if !r.OK {
-		t.Fatalf("update model failed: %s", r.Error)
-	}
-
-	if got := agent.GetModel(); got != "gpt-4.1" {
-		t.Fatalf("GetModel() = %q, want gpt-4.1", got)
-	}
-	if got := agent.GetActiveProvider(); got == nil || got.Model != "gpt-4.1" {
-		t.Fatalf("active provider model = %#v, want gpt-4.1", got)
-	}
-	if savedProvider != "openai" || savedModel != "gpt-4.1" {
-		t.Fatalf("saved provider/model = %q/%q, want openai/gpt-4.1", savedProvider, savedModel)
-	}
-}
-
-func TestMgmt_ProjectModel_SavesModelWithoutActiveProvider(t *testing.T) {
-	agent := &stubModelModeAgent{
-		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
 	}
 	e := NewEngine("test-project", agent, nil, "")
 	var savedModel string
-	var providerSaveCalled bool
 	e.SetModelSaveFunc(func(model string) error {
 		savedModel = model
-		return nil
-	})
-	e.SetProviderModelSaveFunc(func(providerName, model string) error {
-		providerSaveCalled = true
 		return nil
 	})
 
@@ -650,21 +593,11 @@ func TestMgmt_ProjectModel_SavesModelWithoutActiveProvider(t *testing.T) {
 	if savedModel != "gpt-4.1" {
 		t.Fatalf("saved model = %q, want gpt-4.1", savedModel)
 	}
-	if providerSaveCalled {
-		t.Fatal("provider save callback should not be called without active provider")
-	}
 }
 
 func TestMgmt_ProjectModel_ReturnsErrorWhenModelSaveFails(t *testing.T) {
 	agent := &stubModelModeAgent{
 		model: "gpt-4.1-mini",
-		providers: []ProviderConfig{
-			{
-				Name:   "openai",
-				Model:  "gpt-4.1-mini",
-				Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
-			},
-		},
 	}
 	e := NewEngine("test-project", agent, nil, "")
 	e.SetModelSaveFunc(func(model string) error {
@@ -707,97 +640,6 @@ func TestMgmt_ProjectModels_UsesTimeoutContext(t *testing.T) {
 	}
 	if !agent.sawDeadline() {
 		t.Fatal("AvailableModels context has no deadline; want timeout-bounded context")
-	}
-}
-
-func TestMgmt_RemoveGlobalProvider_PurgesFromEngines(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{
-			{Name: "prov-a", BaseURL: "https://a.example"},
-			{Name: "prov-b", BaseURL: "https://b.example"},
-		},
-		active: "prov-b",
-	}
-	e := NewEngine("proj", agent, nil, "")
-
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-
-	removed := ""
-	mgmt.SetRemoveGlobalProvider(func(name string) error {
-		removed = name
-		return nil
-	})
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/providers/", mgmt.wrap(mgmt.handleGlobalProviderRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	req, _ := http.NewRequest("DELETE", ts.URL+"/api/v1/providers/prov-a", nil)
-	req.Header.Set("Authorization", "Bearer tok")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("DELETE: %v", err)
-	}
-	resp.Body.Close()
-
-	if removed != "prov-a" {
-		t.Fatalf("removeGlobalProvider called with %q, want prov-a", removed)
-	}
-
-	remaining := agent.ListProviders()
-	if len(remaining) != 1 {
-		t.Fatalf("remaining providers = %d, want 1", len(remaining))
-	}
-	if remaining[0].Name != "prov-b" {
-		t.Fatalf("remaining provider = %q, want prov-b", remaining[0].Name)
-	}
-}
-
-func TestResolveGlobalProviderForAgent(t *testing.T) {
-	g := GlobalProviderInfo{
-		Name:    "relay",
-		APIKey:  "sk-123",
-		BaseURL: "https://api.example.com/anthropic",
-		Model:   "claude-sonnet-4",
-		Endpoints: map[string]string{
-			"codex": "https://api.example.com/v1",
-		},
-		AgentModels: map[string]string{
-			"codex": "gpt-5.3-codex",
-		},
-		AgentModelLists: map[string][]GlobalModelEntry{
-			"codex": {{Model: "gpt-5.3-codex"}, {Model: "gpt-5.4"}},
-		},
-		Models: []struct {
-			Model string `json:"model"`
-			Alias string `json:"alias,omitempty"`
-		}{{Model: "claude-sonnet-4"}, {Model: "claude-opus-4"}},
-	}
-
-	// claudecode: should use top-level values
-	cc := resolveGlobalProviderForAgent(g, "claudecode")
-	if cc.BaseURL != "https://api.example.com/anthropic" {
-		t.Errorf("claudecode BaseURL = %q", cc.BaseURL)
-	}
-	if cc.Model != "claude-sonnet-4" {
-		t.Errorf("claudecode Model = %q", cc.Model)
-	}
-	if len(cc.Models) != 2 || cc.Models[0].Name != "claude-sonnet-4" {
-		t.Errorf("claudecode Models = %v", cc.Models)
-	}
-
-	// codex: should use per-agent overrides
-	cx := resolveGlobalProviderForAgent(g, "codex")
-	if cx.BaseURL != "https://api.example.com/v1" {
-		t.Errorf("codex BaseURL = %q", cx.BaseURL)
-	}
-	if cx.Model != "gpt-5.3-codex" {
-		t.Errorf("codex Model = %q", cx.Model)
-	}
-	if len(cx.Models) != 2 || cx.Models[0].Name != "gpt-5.3-codex" {
-		t.Errorf("codex Models = %v", cx.Models)
 	}
 }
 
@@ -855,31 +697,6 @@ func TestMgmt_AddPlatformToNewProject_RejectsMissingWorkDir(t *testing.T) {
 
 func TestMgmt_SetupSave_RejectsMissingWorkDir(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
-
-	t.Run("feishu", func(t *testing.T) {
-		mgmt := NewManagementServer(0, "", nil)
-		called := false
-		mgmt.SetSetupFeishuSave(func(req FeishuSetupSaveRequest) error {
-			called = true
-			return nil
-		})
-
-		r, code := mgmtPostHandler(t, mgmt.handleSetupFeishuSave, "/api/v1/setup/feishu/save", map[string]any{
-			"project":    "demo",
-			"app_id":     "app",
-			"app_secret": "secret",
-			"work_dir":   missing,
-		})
-		if r.OK || code != http.StatusBadRequest {
-			t.Fatalf("response ok=%v status=%d error=%q, want 400", r.OK, code, r.Error)
-		}
-		if !strings.Contains(r.Error, "work_dir does not exist") {
-			t.Fatalf("error = %q, want work_dir does not exist", r.Error)
-		}
-		if called {
-			t.Fatal("setupFeishuSave should not be called when work_dir is invalid")
-		}
-	})
 
 	t.Run("weixin", func(t *testing.T) {
 		mgmt := NewManagementServer(0, "", nil)
@@ -1108,222 +925,6 @@ func TestMgmt_ProjectSend_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── Project Providers ──
-
-func TestMgmt_ProjectProviders_NoProviderSwitcher(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtGet(t, ts.URL+"/api/v1/projects/test-project/providers", "tok")
-	if r.OK {
-		t.Fatal("expected error when agent doesn't support ProviderSwitcher")
-	}
-	if !strings.Contains(r.Error, "provider switching") {
-		t.Fatalf("error = %q", r.Error)
-	}
-}
-
-func TestMgmt_ProjectProviders_ListAndAdd(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "openai", BaseURL: "https://api.openai.com"}},
-		active:    "openai",
-	}
-	e := NewEngine("proj", agent, nil, "")
-
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	// GET list
-	r := mgmtGet(t, ts.URL+"/api/v1/projects/proj/providers", "tok")
-	if !r.OK {
-		t.Fatalf("list providers failed: %s", r.Error)
-	}
-	var list struct {
-		Providers      []map[string]any `json:"providers"`
-		ActiveProvider string           `json:"active_provider"`
-	}
-	if err := json.Unmarshal(r.Data, &list); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(list.Providers) != 1 {
-		t.Fatalf("providers count = %d, want 1", len(list.Providers))
-	}
-	if list.ActiveProvider != "openai" {
-		t.Fatalf("active = %q, want openai", list.ActiveProvider)
-	}
-
-	// POST add
-	r = mgmtPost(t, ts.URL+"/api/v1/projects/proj/providers", "tok", map[string]string{
-		"name":     "anthropic",
-		"api_key":  "sk-test",
-		"base_url": "https://api.anthropic.com",
-	})
-	if !r.OK {
-		t.Fatalf("add provider failed: %s", r.Error)
-	}
-	if len(agent.providers) != 2 {
-		t.Fatalf("providers count = %d, want 2", len(agent.providers))
-	}
-}
-
-func TestMgmt_ProjectProviders_AddMissingName(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "openai"}},
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPost(t, ts.URL+"/api/v1/projects/proj/providers", "tok", map[string]string{"api_key": "sk"})
-	if r.OK {
-		t.Fatal("expected error for missing name")
-	}
-}
-
-func TestMgmt_ProjectProviders_Activate(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{
-			{Name: "openai", BaseURL: "https://openai.com"},
-			{Name: "claude", BaseURL: "https://claude.ai"},
-		},
-		active: "openai",
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPost(t, ts.URL+"/api/v1/projects/proj/providers/claude/activate", "tok", nil)
-	if !r.OK {
-		t.Fatalf("activate failed: %s", r.Error)
-	}
-	if agent.active != "claude" {
-		t.Fatalf("active = %q, want claude", agent.active)
-	}
-}
-
-func TestMgmt_ProjectProviders_ActivateNotFound(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "openai"}},
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPost(t, ts.URL+"/api/v1/projects/proj/providers/nope/activate", "tok", nil)
-	if r.OK {
-		t.Fatal("expected 404 for nonexistent provider")
-	}
-}
-
-func TestMgmt_ProjectProviders_DeleteActive(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{
-			{Name: "openai"},
-			{Name: "claude"},
-		},
-		active: "openai",
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtDelete(t, ts.URL+"/api/v1/projects/proj/providers/openai", "tok")
-	if r.OK {
-		t.Fatal("expected error when deleting active provider")
-	}
-	if !strings.Contains(r.Error, "active provider") {
-		t.Fatalf("error = %q", r.Error)
-	}
-}
-
-func TestMgmt_ProjectProviders_DeleteInactive(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{
-			{Name: "openai"},
-			{Name: "claude"},
-		},
-		active: "openai",
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtDelete(t, ts.URL+"/api/v1/projects/proj/providers/claude", "tok")
-	if !r.OK {
-		t.Fatalf("delete failed: %s", r.Error)
-	}
-	if len(agent.providers) != 1 {
-		t.Fatalf("providers = %d, want 1", len(agent.providers))
-	}
-}
-
-// ── Project Provider Refs ──
-
-func TestMgmt_ProjectProviderRefs_GetEmpty(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "openai"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtGet(t, ts.URL+"/api/v1/projects/proj/provider-refs", "tok")
-	if !r.OK {
-		t.Fatalf("get provider-refs failed: %s", r.Error)
-	}
-	var data struct {
-		ProviderRefs []string `json:"provider_refs"`
-	}
-	if err := json.Unmarshal(r.Data, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(data.ProviderRefs) != 0 {
-		t.Fatalf("expected empty refs, got %v", data.ProviderRefs)
-	}
-}
-
-func TestMgmt_ProjectProviderRefs_PutNotConfigured(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "openai"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPut(t, ts.URL+"/api/v1/projects/proj/provider-refs", "tok", map[string]any{
-		"provider_refs": []string{"shared-1"},
-	})
-	if r.OK {
-		t.Fatal("expected error when saveProviderRefs is nil")
-	}
-}
-
 // ── Project Users ──
 
 func TestMgmt_ProjectUsers_Get(t *testing.T) {
@@ -1362,121 +963,6 @@ func TestMgmt_ProjectDelete_NotConfigured(t *testing.T) {
 	}
 	if !strings.Contains(r.Error, "not configured") {
 		t.Fatalf("error = %q", r.Error)
-	}
-}
-
-// ── Global Providers ──
-
-func TestMgmt_GlobalProviders_GetEmpty(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtGet(t, ts.URL+"/api/v1/providers", "tok")
-	if !r.OK {
-		t.Fatalf("get global providers failed: %s", r.Error)
-	}
-	var data struct {
-		Providers []any `json:"providers"`
-	}
-	if err := json.Unmarshal(r.Data, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(data.Providers) != 0 {
-		t.Fatalf("expected empty, got %d", len(data.Providers))
-	}
-}
-
-func TestMgmt_GlobalProviders_GetWithFunc(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetListGlobalProviders(func() ([]GlobalProviderInfo, error) {
-		return []GlobalProviderInfo{{Name: "shared-relay"}}, nil
-	})
-
-	r := mgmtGet(t, ts.URL+"/api/v1/providers", "tok")
-	if !r.OK {
-		t.Fatalf("get providers failed: %s", r.Error)
-	}
-}
-
-func TestMgmt_GlobalProviders_PostNotConfigured(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtPost(t, ts.URL+"/api/v1/providers", "tok", map[string]string{"name": "new"})
-	if r.OK {
-		t.Fatal("expected error when addGlobalProvider is nil")
-	}
-}
-
-func TestMgmt_GlobalProviders_PostMissingName(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetAddGlobalProvider(func(info GlobalProviderInfo) error { return nil })
-
-	r := mgmtPost(t, ts.URL+"/api/v1/providers", "tok", map[string]string{"api_key": "sk"})
-	if r.OK {
-		t.Fatal("expected error for missing name")
-	}
-}
-
-func TestMgmt_GlobalProviders_PostSuccess(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	var added string
-	mgmt.SetAddGlobalProvider(func(info GlobalProviderInfo) error {
-		added = info.Name
-		return nil
-	})
-
-	r := mgmtPost(t, ts.URL+"/api/v1/providers", "tok", map[string]string{"name": "new-relay"})
-	if !r.OK {
-		t.Fatalf("add global provider failed: %s", r.Error)
-	}
-	if added != "new-relay" {
-		t.Fatalf("added = %q, want new-relay", added)
-	}
-}
-
-func TestMgmt_GlobalProviders_PostDuplicate(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetAddGlobalProvider(func(info GlobalProviderInfo) error {
-		return errors.New("already exists: " + info.Name)
-	})
-
-	r := mgmtPost(t, ts.URL+"/api/v1/providers", "tok", map[string]string{"name": "dup"})
-	if r.OK {
-		t.Fatal("expected conflict error")
-	}
-}
-
-func TestMgmt_GlobalProviders_UpdateNotConfigured(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtPut(t, ts.URL+"/api/v1/providers/some-provider", "tok", map[string]string{"name": "some-provider"})
-	if r.OK {
-		t.Fatal("expected error when updateGlobalProvider is nil")
-	}
-}
-
-func TestMgmt_GlobalProviders_UpdateSuccess(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	var updated string
-	mgmt.SetUpdateGlobalProvider(func(name string, info GlobalProviderInfo) error {
-		updated = name
-		return nil
-	})
-
-	r := mgmtPut(t, ts.URL+"/api/v1/providers/relay-1", "tok", map[string]string{"model": "gpt-5"})
-	if !r.OK {
-		t.Fatalf("update global provider failed: %s", r.Error)
-	}
-	if updated != "relay-1" {
-		t.Fatalf("updated = %q, want relay-1", updated)
-	}
-}
-
-func TestMgmt_GlobalProviders_DeleteNotFound(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetRemoveGlobalProvider(func(name string) error {
-		return errors.New("not found: " + name)
-	})
-
-	r := mgmtDelete(t, ts.URL+"/api/v1/providers/nope", "tok")
-	if r.OK {
-		t.Fatal("expected 404")
 	}
 }
 
@@ -1571,14 +1057,14 @@ func TestMgmt_Restart_WithSessionKey(t *testing.T) {
 
 	r := mgmtPost(t, ts.URL+"/api/v1/restart", "tok", map[string]string{
 		"session_key": "user1",
-		"platform":    "feishu",
+		"platform":    "telegram",
 	})
 	if !r.OK {
 		t.Fatalf("restart with session_key failed: %s", r.Error)
 	}
 	req := <-RestartCh
-	if req.SessionKey != "user1" || req.Platform != "feishu" {
-		t.Fatalf("restart request = %+v, want session_key=user1 platform=feishu", req)
+	if req.SessionKey != "user1" || req.Platform != "telegram" {
+		t.Fatalf("restart request = %+v, want session_key=user1 platform=telegram", req)
 	}
 }
 
@@ -1945,162 +1431,6 @@ func TestMgmt_Sessions_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── Provider edge cases ──
-
-func TestMgmt_ProjectProviders_PostInvalidJSON(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/projects/proj/providers", strings.NewReader("{bad"))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var r mgmtResponse
-	json.NewDecoder(resp.Body).Decode(&r)
-	if r.OK {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestMgmt_ProjectProviders_DeleteNotFound(t *testing.T) {
-	agent := &stubProviderAgent{
-		providers: []ProviderConfig{{Name: "openai"}},
-		active:    "openai",
-	}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtDelete(t, ts.URL+"/api/v1/projects/proj/providers/nonexistent", "tok")
-	if r.OK {
-		t.Fatal("expected 404 for nonexistent provider")
-	}
-}
-
-func TestMgmt_ProjectProviders_MethodNotAllowed(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPut(t, ts.URL+"/api/v1/projects/proj/providers", "tok", nil)
-	if r.OK {
-		t.Fatal("expected PUT on providers list to fail")
-	}
-}
-
-// ── Provider Refs edge cases ──
-
-func TestMgmt_ProjectProviderRefs_PutInvalidJSON(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mgmt.SetSaveProviderRefs(func(proj string, refs []string) error { return nil })
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/v1/projects/proj/provider-refs", strings.NewReader("{bad"))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var r mgmtResponse
-	json.NewDecoder(resp.Body).Decode(&r)
-	if r.OK {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestMgmt_ProjectProviderRefs_PutSaveError(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mgmt.SetSaveProviderRefs(func(proj string, refs []string) error {
-		return errors.New("disk full")
-	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPut(t, ts.URL+"/api/v1/projects/proj/provider-refs", "tok", map[string]any{
-		"provider_refs": []string{"shared"},
-	})
-	if r.OK {
-		t.Fatal("expected error from save")
-	}
-	if !strings.Contains(r.Error, "disk full") {
-		t.Fatalf("error = %q", r.Error)
-	}
-}
-
-func TestMgmt_ProjectProviderRefs_PutSuccess(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	var savedRefs []string
-	mgmt.SetSaveProviderRefs(func(proj string, refs []string) error {
-		savedRefs = refs
-		return nil
-	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtPut(t, ts.URL+"/api/v1/projects/proj/provider-refs", "tok", map[string]any{
-		"provider_refs": []string{"shared-1", "shared-2"},
-	})
-	if !r.OK {
-		t.Fatalf("put provider-refs failed: %s", r.Error)
-	}
-	if len(savedRefs) != 2 {
-		t.Fatalf("savedRefs = %v", savedRefs)
-	}
-}
-
-func TestMgmt_ProjectProviderRefs_MethodNotAllowed(t *testing.T) {
-	agent := &stubProviderAgent{providers: []ProviderConfig{{Name: "a"}}}
-	e := NewEngine("proj", agent, nil, "")
-	mgmt := NewManagementServer(0, "tok", nil)
-	mgmt.RegisterEngine("proj", e)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/projects/", mgmt.wrap(mgmt.handleProjectRoutes))
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	r := mgmtDelete(t, ts.URL+"/api/v1/projects/proj/provider-refs", "tok")
-	if r.OK {
-		t.Fatal("expected DELETE on provider-refs to fail")
-	}
-}
-
 // ── Users edge cases ──
 
 func TestMgmt_ProjectUsers_PatchValid(t *testing.T) {
@@ -2144,113 +1474,6 @@ func TestMgmt_ProjectUsers_MethodNotAllowed(t *testing.T) {
 	r := mgmtDelete(t, ts.URL+"/api/v1/projects/test-project/users", "tok")
 	if r.OK {
 		t.Fatal("expected DELETE on users to fail")
-	}
-}
-
-// ── Global Providers edge cases ──
-
-func TestMgmt_GlobalProviders_GetError(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetListGlobalProviders(func() ([]GlobalProviderInfo, error) {
-		return nil, errors.New("db connection lost")
-	})
-	r := mgmtGet(t, ts.URL+"/api/v1/providers", "tok")
-	if r.OK {
-		t.Fatal("expected error from list")
-	}
-	if !strings.Contains(r.Error, "db connection lost") {
-		t.Fatalf("error = %q", r.Error)
-	}
-}
-
-func TestMgmt_GlobalProviders_PostInvalidJSON(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetAddGlobalProvider(func(info GlobalProviderInfo) error { return nil })
-
-	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/providers", strings.NewReader("{bad"))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var r mgmtResponse
-	json.NewDecoder(resp.Body).Decode(&r)
-	if r.OK {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestMgmt_GlobalProviders_MethodNotAllowed(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtDelete(t, ts.URL+"/api/v1/providers", "tok")
-	if r.OK {
-		t.Fatal("expected DELETE on /providers to fail")
-	}
-}
-
-func TestMgmt_GlobalProviders_UpdateNotFound(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetUpdateGlobalProvider(func(name string, info GlobalProviderInfo) error {
-		return errors.New("not found: " + name)
-	})
-	r := mgmtPut(t, ts.URL+"/api/v1/providers/nope", "tok", map[string]string{"model": "x"})
-	if r.OK {
-		t.Fatal("expected 404")
-	}
-}
-
-func TestMgmt_GlobalProviders_UpdateInvalidJSON(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetUpdateGlobalProvider(func(name string, info GlobalProviderInfo) error { return nil })
-
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/v1/providers/test", strings.NewReader("{bad"))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var r mgmtResponse
-	json.NewDecoder(resp.Body).Decode(&r)
-	if r.OK {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestMgmt_GlobalProviders_DeleteNotConfigured(t *testing.T) {
-	_, ts, _ := testManagementServer(t, "tok")
-	r := mgmtDelete(t, ts.URL+"/api/v1/providers/anything", "tok")
-	if r.OK {
-		t.Fatal("expected error when removeGlobalProvider is nil")
-	}
-}
-
-func TestMgmt_GlobalProviders_DeleteSuccess(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	var deleted string
-	mgmt.SetRemoveGlobalProvider(func(name string) error {
-		deleted = name
-		return nil
-	})
-	r := mgmtDelete(t, ts.URL+"/api/v1/providers/relay-old", "tok")
-	if !r.OK {
-		t.Fatalf("delete global provider failed: %s", r.Error)
-	}
-	if deleted != "relay-old" {
-		t.Fatalf("deleted = %q, want relay-old", deleted)
-	}
-}
-
-func TestMgmt_GlobalProviders_RouteMethodNotAllowed(t *testing.T) {
-	mgmt, ts, _ := testManagementServer(t, "tok")
-	mgmt.SetUpdateGlobalProvider(func(name string, info GlobalProviderInfo) error { return nil })
-
-	r := mgmtPost(t, ts.URL+"/api/v1/providers/test-prov", "tok", nil)
-	if r.OK {
-		t.Fatal("expected POST on /providers/{name} to fail")
 	}
 }
 

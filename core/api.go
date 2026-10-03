@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -48,7 +47,6 @@ type SendRequest struct {
 	Message    string            `json:"message,omitempty"` // caption; only sent together with images/files
 	WorkDir    string            `json:"work_dir,omitempty"`
 	CWD        string            `json:"cwd,omitempty"`
-	TTSText    string            `json:"tts_text,omitempty"`
 	Images     []ImageAttachment `json:"images,omitempty"`
 	Files      []FileAttachment  `json:"files,omitempty"`
 	Audios     []FileAttachment  `json:"audios,omitempty"`
@@ -169,8 +167,8 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.TTSText) == "" && len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
-		http.Error(w, "tts_text or attachment is required", http.StatusBadRequest)
+	if len(req.Images) == 0 && len(req.Files) == 0 && len(req.Audios) == 0 && len(req.Videos) == 0 {
+		http.Error(w, "attachment is required", http.StatusBadRequest)
 		return
 	}
 	if req.Message != "" && len(req.Images) == 0 && len(req.Files) == 0 {
@@ -224,13 +222,6 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.Videos) > 0 {
 		if err := engine.SendVideosToSession(req.SessionKey, req.Videos); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	if strings.TrimSpace(req.TTSText) != "" {
-		if err := engine.SendTTSToSession(req.SessionKey, req.TTSText); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

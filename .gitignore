@@ -121,7 +121,7 @@ NOTES.md
 # ============================================================================
 # System
 # ============================================================================
-# Thumbs.db on Windows
+# Thumbs.db and similar OS metadata
 Thumbs.db
 ehthumbs.db
 Desktop.ini

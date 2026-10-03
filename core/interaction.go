@@ -9,7 +9,7 @@ import (
 
 // Interactive agent prompts (AskUserQuestion, ExitPlanMode plan review and
 // tool permission requests) share one reply protocol so that platforms
-// without buttons (QQ OneBot, Weixin) work the same way as Telegram/Feishu:
+// without buttons (QQ OneBot, Weixin) work the same way as Telegram:
 //
 //   - buttons send "askq:<question>:<option>" (or "perm:*"), which the engine
 //     treats exactly like the typed number;
@@ -116,12 +116,12 @@ func (e *Engine) hasPendingInteraction(sessionKey string) bool {
 func (e *Engine) sendPlanPrompt(p Platform, replyCtx any, plan string, allowBypass bool) {
 	plan = strings.TrimSpace(plan)
 	options := []string{
-		e.i18n.T(MsgPlanOptAutoEdits),
-		e.i18n.T(MsgPlanOptReview),
-		e.i18n.T(MsgPlanOptRevise),
+		"Approve, auto-accept edits",
+		"Approve, confirm each edit",
+		"Keep planning",
 	}
 	if allowBypass {
-		options = append(options, e.i18n.T(MsgPlanOptBypass))
+		options = append(options, "Approve, bypass all permissions")
 	}
 
 	e.hooks.Emit(HookEvent{
@@ -132,19 +132,19 @@ func (e *Engine) sendPlanPrompt(p Platform, replyCtx any, plan string, allowBypa
 	})
 
 	if supportsCards(p) {
-		cb := NewCard().Title(e.i18n.T(MsgPlanTitle), "blue").Markdown(plan)
+		cb := NewCard().Title("Plan ready for review", "blue").Markdown(plan)
 		for i, opt := range options {
 			cb.ListItemBtnExtra(opt, opt, "default", fmt.Sprintf("askq:0:%d", i+1), map[string]string{
 				"askq_label":    opt,
-				"askq_question": e.i18n.T(MsgPlanTitle),
+				"askq_question": "Plan ready for review",
 			})
 		}
-		cb.Note(e.i18n.T(MsgPlanNote))
+		cb.Note("Or reply with feedback and Claude will revise the plan. Send /stop to cancel.")
 		e.sendWithCard(p, replyCtx, cb.Build())
 		return
 	}
 
-	header := "**" + e.i18n.T(MsgPlanTitle) + "**\n\n"
+	header := "**" + "Plan ready for review" + "**\n\n"
 	hint := e.interactionHint(p, replyCtx)
 
 	if bs, ok := p.(InlineButtonSender); ok {
@@ -156,7 +156,7 @@ func (e *Engine) sendPlanPrompt(p Platform, replyCtx any, plan string, allowBypa
 			slog.Warn("sendPlanPrompt: outgoing wait cancelled", "platform", p.Name(), "error", err)
 			return
 		}
-		body := header + plan + "\n\n" + e.i18n.T(MsgPlanNote) + hint
+		body := header + plan + "\n\n" + "Or reply with feedback and Claude will revise the plan. Send /stop to cancel." + hint
 		if err := bs.SendWithButtons(e.ctx, replyCtx, body, rows); err == nil {
 			return
 		} else {
@@ -169,13 +169,13 @@ func (e *Engine) sendPlanPrompt(p Platform, replyCtx any, plan string, allowBypa
 		e.send(p, replyCtx, chunk)
 	}
 	var sb strings.Builder
-	sb.WriteString(e.i18n.T(MsgPlanReplyWith))
+	sb.WriteString("Reply with a number:")
 	sb.WriteString("\n")
 	for i, opt := range options {
 		fmt.Fprintf(&sb, "%d. %s\n", i+1, opt)
 	}
 	sb.WriteString("\n")
-	sb.WriteString(e.i18n.T(MsgPlanNote))
+	sb.WriteString("Or reply with feedback and Claude will revise the plan. Send /stop to cancel.")
 	sb.WriteString(hint)
 	e.send(p, replyCtx, sb.String())
 }
@@ -217,7 +217,7 @@ func (e *Engine) handlePlanResponse(p Platform, msg *Message, state *interactive
 	}
 	switcher, canSwitch := state.agentSession.(LiveModeSwitcher)
 	if choice == planChoiceBypass && !canSwitch {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPlanBypassUnavailable))
+		e.reply(p, msg.ReplyCtx, "This agent cannot switch to bypass mode mid-session. Choose 1, 2 or 3.")
 		return true
 	}
 
@@ -230,17 +230,17 @@ func (e *Engine) handlePlanResponse(p Platform, msg *Message, state *interactive
 	switch {
 	case choice == planChoiceAutoEdits || choice == planChoiceReview || choice == planChoiceBypass:
 		mode := "default"
-		ack = e.i18n.T(MsgPlanApprovedReview)
+		ack = "Plan approved — you will be asked before each edit."
 		switch choice {
 		case planChoiceAutoEdits:
 			mode = "acceptEdits"
-			ack = e.i18n.T(MsgPlanApprovedAutoEdits)
+			ack = "Plan approved — edits will be auto-accepted."
 		case planChoiceBypass:
 			// Claude only accepts setMode bypassPermissions when it was
 			// launched with it, so leave plan mode via acceptEdits and let
 			// the bridge session auto-approve everything else (below).
 			mode = "acceptEdits"
-			ack = e.i18n.T(MsgPlanApprovedBypass)
+			ack = "Plan approved — all permissions are bypassed for this session (questions and plan reviews still come to you)."
 		}
 		result = PermissionResult{
 			Behavior:     "allow",
@@ -253,29 +253,29 @@ func (e *Engine) handlePlanResponse(p Platform, msg *Message, state *interactive
 		state.mu.Lock()
 		pending.awaitingFeedback = true
 		state.mu.Unlock()
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPlanAskFeedback)+e.interactionHint(p, msg.ReplyCtx))
+		e.reply(p, msg.ReplyCtx, "What should Claude change? Reply with your feedback, or reply **skip** to let Claude keep refining on its own."+e.interactionHint(p, msg.ReplyCtx))
 		return true
 	case choice == planChoiceRevise || strings.EqualFold(strings.TrimSpace(content), "skip"):
 		result = PermissionResult{
 			Behavior: "deny",
 			Message:  "The user rejected the plan and wants to keep planning. Refine the plan, asking clarifying questions if needed, then present it again with ExitPlanMode.",
 		}
-		ack = e.i18n.T(MsgPlanKeepPlanning)
+		ack = "Claude will keep planning."
 	default:
 		result = PermissionResult{
 			Behavior: "deny",
 			Message:  "The user rejected the plan with this feedback:\n\n" + strings.TrimSpace(content) + "\n\nRevise the plan accordingly and present it again with ExitPlanMode.",
 		}
-		ack = e.i18n.T(MsgPlanFeedbackSent)
+		ack = "Feedback sent — Claude will revise the plan."
 	}
 
 	if err := state.agentSession.RespondPermission(pending.RequestID, result); err != nil {
 		slog.Error("failed to send plan review response", "error", err)
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("Error: %v", err))
 	} else {
 		if choice == planChoiceBypass && !switcher.SetLiveMode("bypassPermissions") {
 			slog.Warn("plan review: live switch to bypassPermissions refused")
-			ack = e.i18n.T(MsgPlanApprovedAutoEdits)
+			ack = "Plan approved — edits will be auto-accepted."
 		}
 		e.reply(p, msg.ReplyCtx, ack)
 	}

@@ -8,7 +8,6 @@ import ProjectDetail from '@/pages/Projects/ProjectDetail';
 import ChatList from '@/pages/Chat/ChatList';
 import ChatView from '@/pages/Chat/ChatView';
 import SystemConfig from '@/pages/System/Config';
-import ProviderList from '@/pages/Providers/ProviderList';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -26,7 +25,6 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="projects" element={<ProjectList />} />
         <Route path="projects/:name" element={<ProjectDetail />} />
-        <Route path="providers" element={<ProviderList />} />
         <Route path="chat" element={<ChatList />} />
         <Route path="chat/:name" element={<ChatView />} />
         <Route path="system" element={<SystemConfig />} />

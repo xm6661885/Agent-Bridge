@@ -31,20 +31,20 @@ tenant_id = "tenant"
 robot_id = "robot"
 
 [[projects]]
-name = "feishu"
+name = "telegram"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 
 [projects.platforms.options]
-app_id = "${CAPTURE_CONFIG_FEISHU_APP_ID}"
-app_secret = "${CAPTURE_CONFIG_FEISHU_SECRET}"
+app_id = "${CAPTURE_CONFIG_TG_TOKEN}"
+app_secret = "${CAPTURE_CONFIG_TG_SECRET}"
 `), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("CAPTURE_CONFIG_YOUZONE", "youzone-token")
-	t.Setenv("CAPTURE_CONFIG_FEISHU_APP_ID", "cli_test")
-	t.Setenv("CAPTURE_CONFIG_FEISHU_SECRET", "feishu-secret")
+	t.Setenv("CAPTURE_CONFIG_TG_TOKEN", "cli_test")
+	t.Setenv("CAPTURE_CONFIG_TG_SECRET", "tg-secret")
 
 	cfg := Config{BinaryPath: "/bin/true", WorkDir: workDir}
 	if err := Resolve(&cfg); err != nil {
@@ -54,11 +54,11 @@ app_secret = "${CAPTURE_CONFIG_FEISHU_SECRET}"
 	if cfg.EnvExtra["CAPTURE_CONFIG_YOUZONE"] != "youzone-token" {
 		t.Errorf("CAPTURE_CONFIG_YOUZONE not captured; EnvExtra=%+v", cfg.EnvExtra)
 	}
-	if cfg.EnvExtra["CAPTURE_CONFIG_FEISHU_APP_ID"] != "cli_test" {
-		t.Errorf("CAPTURE_CONFIG_FEISHU_APP_ID not captured; EnvExtra=%+v", cfg.EnvExtra)
+	if cfg.EnvExtra["CAPTURE_CONFIG_TG_TOKEN"] != "cli_test" {
+		t.Errorf("CAPTURE_CONFIG_TG_TOKEN not captured; EnvExtra=%+v", cfg.EnvExtra)
 	}
-	if cfg.EnvExtra["CAPTURE_CONFIG_FEISHU_SECRET"] != "feishu-secret" {
-		t.Errorf("CAPTURE_CONFIG_FEISHU_SECRET not captured; EnvExtra=%+v", cfg.EnvExtra)
+	if cfg.EnvExtra["CAPTURE_CONFIG_TG_SECRET"] != "tg-secret" {
+		t.Errorf("CAPTURE_CONFIG_TG_SECRET not captured; EnvExtra=%+v", cfg.EnvExtra)
 	}
 }
 

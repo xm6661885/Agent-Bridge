@@ -187,8 +187,8 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		innerArgs = append(innerArgs, "--system-prompt", systemPrompt)
 	}
 
-	// Pass the user's append_system_prompt via a per-spawn file to avoid
-	// the Windows 8192-byte command-line limit (#1376). The file is removed
+	// Pass the user's append_system_prompt via a per-spawn file to keep
+	// command lines short (#1376). The file is removed
 	// on Close.
 	var promptFilePath string
 	if appendSystemPrompt != "" {

@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { FileCode, RefreshCw, RotateCcw, Settings2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, Button } from '@/components/ui';
 import { restartSystem, reloadConfig } from '@/api/status';
@@ -7,7 +6,6 @@ import api from '@/api/client';
 import GlobalSettings from './GlobalSettings';
 
 export default function SystemConfig() {
-  const { t } = useTranslation();
   const [content, setContent] = useState('');
   const [format, setFormat] = useState<'toml' | 'json'>('toml');
   const [loading, setLoading] = useState(true);
@@ -47,20 +45,20 @@ export default function SystemConfig() {
   }, [fetchConfig]);
 
   const handleRestart = async () => {
-    if (!confirm(t('system.restartConfirm'))) return;
+    if (!confirm("Restart the service? Active sessions may be interrupted.")) return;
     try {
       await restartSystem();
-      setActionMsg(t('common.success'));
+      setActionMsg("Success");
     } catch (e: any) {
       setActionMsg(e.message);
     }
   };
 
   const handleReload = async () => {
-    if (!confirm(t('system.reloadConfirm'))) return;
+    if (!confirm("Reload configuration from disk?")) return;
     try {
       await reloadConfig();
-      setActionMsg(t('common.success'));
+      setActionMsg("Success");
       fetchConfig();
     } catch (e: any) {
       setActionMsg(e.message);
@@ -71,8 +69,8 @@ export default function SystemConfig() {
     <div className="space-y-6 animate-fade-in ">
       {/* Actions */}
       <div className="flex flex-wrap gap-3">
-        <Button variant="secondary" onClick={handleReload}><RefreshCw size={16} /> {t('system.reload')}</Button>
-        <Button variant="danger" onClick={handleRestart}><RotateCcw size={16} /> {t('system.restart')}</Button>
+        <Button variant="secondary" onClick={handleReload}><RefreshCw size={16} /> {"Reload config"}</Button>
+        <Button variant="danger" onClick={handleRestart}><RotateCcw size={16} /> {"Restart"}</Button>
       </div>
 
       {actionMsg && (
@@ -83,7 +81,7 @@ export default function SystemConfig() {
       <div>
         <div className="flex items-center gap-2 mb-4">
           <Settings2 size={16} className="text-gray-400" />
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white">{t('settings.title', 'Global Settings')}</h2>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white">{"Global Settings"}</h2>
         </div>
         <GlobalSettings />
       </div>
@@ -97,7 +95,7 @@ export default function SystemConfig() {
         >
           {showRaw ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
           <FileCode size={16} className="text-gray-400" />
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{t('system.rawConfig', 'Raw Config')}</h3>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{"Raw Config"}</h3>
           <span className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded uppercase">
             {format}
           </span>
@@ -108,7 +106,7 @@ export default function SystemConfig() {
               <div className="text-gray-400 animate-pulse text-sm">Loading...</div>
             ) : (
               <pre className="text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 overflow-auto max-h-[65vh] font-mono leading-relaxed whitespace-pre">
-                {content || t('common.noData')}
+                {content || "No data"}
               </pre>
             )}
           </div>

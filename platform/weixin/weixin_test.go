@@ -98,7 +98,7 @@ func TestCollectInboundMediaUsesCDNHTTPClient(t *testing.T) {
 		cdnHttpClient: server.Client(),
 	}
 
-	images, files, audio := p.collectInboundMedia(context.Background(), []messageItem{{
+	images, files := p.collectInboundMedia(context.Background(), []messageItem{{
 		Type: messageItemImage,
 		ImageItem: &imageItem{
 			Media: &cdnMedia{EncryptQueryParam: "image-ref"},
@@ -117,9 +117,6 @@ func TestCollectInboundMediaUsesCDNHTTPClient(t *testing.T) {
 	if len(files) != 0 {
 		t.Fatalf("files len = %d, want 0", len(files))
 	}
-	if audio != nil {
-		t.Fatalf("audio = %#v, want nil", audio)
-	}
 }
 
 func TestSendMessageResp_JSON(t *testing.T) {
@@ -129,41 +126,6 @@ func TestSendMessageResp_JSON(t *testing.T) {
 	}
 	if r.Ret != -1 || r.Errcode != 100 || r.Errmsg != "rate limited" {
 		t.Fatalf("got %+v", r)
-	}
-}
-
-func TestSendAudioRejectsEmptyAudio(t *testing.T) {
-	p := &Platform{}
-	// resolveReplyContext checks context_token first, so provide one
-	rc := &replyContext{peerUserID: "test", contextToken: "valid-token"}
-	err := p.SendAudio(context.Background(), rc, []byte{}, "wav")
-	if err == nil {
-		t.Fatal("expected error for empty audio")
-	}
-	if !containsStr(err.Error(), "empty audio") {
-		t.Fatalf("expected 'empty audio' error, got: %v", err)
-	}
-}
-
-func TestSendAudioRejectsInvalidReplyContext(t *testing.T) {
-	p := &Platform{}
-	err := p.SendAudio(context.Background(), "invalid-context", []byte("audio-data"), "wav")
-	if err == nil {
-		t.Fatal("expected error for invalid reply context")
-	}
-	if !containsStr(err.Error(), "invalid reply context") {
-		t.Fatalf("expected 'invalid reply context' error, got: %v", err)
-	}
-}
-
-func TestSendAudioRejectsNilReplyContext(t *testing.T) {
-	p := &Platform{}
-	err := p.SendAudio(context.Background(), nil, []byte("audio-data"), "wav")
-	if err == nil {
-		t.Fatal("expected error for nil reply context")
-	}
-	if !containsStr(err.Error(), "invalid reply context") {
-		t.Fatalf("expected 'invalid reply context' error, got: %v", err)
 	}
 }
 

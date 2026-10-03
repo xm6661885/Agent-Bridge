@@ -249,8 +249,8 @@ func (p *Platform) handleMessage(payload map[string]any) {
 	}
 
 	// Parse message content from CQ message array or raw_message
-	text, images, files, audio := p.parseMessage(payload, msgType, groupID)
-	if text == "" && len(images) == 0 && len(files) == 0 && audio == nil {
+	text, images, files := p.parseMessage(payload, msgType, groupID)
+	if text == "" && len(images) == 0 && len(files) == 0 {
 		return
 	}
 
@@ -287,7 +287,6 @@ func (p *Platform) handleMessage(payload map[string]any) {
 		Content:    text,
 		Images:     images,
 		Files:      files,
-		Audio:      audio,
 		ReplyCtx:   rctx,
 	}
 	// Make agent turns from the same QQ group FIFO. This also preserves strict
@@ -400,11 +399,10 @@ func containsCQAtMention(raw string, selfID int64) bool {
 	}
 }
 
-func (p *Platform) parseMessage(payload map[string]any, msgType string, groupID int64) (string, []core.ImageAttachment, []core.FileAttachment, *core.AudioAttachment) {
+func (p *Platform) parseMessage(payload map[string]any, msgType string, groupID int64) (string, []core.ImageAttachment, []core.FileAttachment) {
 	var textParts []string
 	var images []core.ImageAttachment
 	var files []core.FileAttachment
-	var audio *core.AudioAttachment
 
 	// OneBot message can be an array of segments or a CQ-code string.
 	switch msg := payload["message"].(type) {
@@ -452,10 +450,11 @@ func (p *Platform) parseMessage(payload map[string]any, msgType string, groupID 
 							format = "mp3"
 						}
 					}
-					audio = &core.AudioAttachment{
-						Data:   audioData,
-						Format: format,
-					}
+					files = append(files, core.FileAttachment{
+						MimeType: "audio/" + format,
+						Data:     audioData,
+						FileName: "voice." + format,
+					})
 				}
 			case "file":
 				name, _ := data["name"].(string)
@@ -581,7 +580,7 @@ func (p *Platform) parseMessage(payload map[string]any, msgType string, groupID 
 		}
 	}
 
-	return strings.TrimSpace(strings.Join(textParts, "")), images, files, audio
+	return strings.TrimSpace(strings.Join(textParts, "")), images, files
 }
 
 // Reply sends a message as a reply to an incoming message.
@@ -733,7 +732,7 @@ func (p *Platform) callAPI(action string, params map[string]any) (map[string]any
 
 // callHTTPAPI calls a OneBot v11 HTTP endpoint (e.g. /upload_group_file).
 // Used for file operations — avoids WebSocket message size limits and
-// file-path issues across Windows/WSL/Docker boundaries.
+// file-path issues across WSL/Docker boundaries.
 // Requires http_url to be configured.
 func (p *Platform) callHTTPAPI(action string, params map[string]any) (map[string]any, error) {
 	if p.httpURL == "" {
@@ -1006,7 +1005,7 @@ func downloadFile(url string) ([]byte, string, error) {
 // Implements core.FileSender.
 //
 // Uses base64-encoded file data to avoid file-path issues across
-// Windows/WSL/Docker. Routes through NapCat HTTP API when configured
+// WSL/Docker boundaries. Routes through NapCat HTTP API when configured
 // (better for large files), falls back to WebSocket.
 func (p *Platform) SendFile(ctx context.Context, replyCtx any, file core.FileAttachment) error {
 	rctx, ok := replyCtx.(*replyContext)

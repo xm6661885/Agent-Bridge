@@ -74,26 +74,6 @@ func setupE2E(t *testing.T, projectName string) (*core.Engine, *mockPlatform, fu
 		t.Skipf("skip: cannot create agent: %v", err)
 	}
 
-	if ps, ok := agent.(core.ProviderSwitcher); ok {
-		var providers []core.ProviderConfig
-		for _, ref := range proj.Agent.ProviderRefs {
-			for _, gp := range cfg.Providers {
-				if gp.Name == ref {
-					providers = append(providers, configProviderToCore(gp))
-					break
-				}
-			}
-		}
-		if len(providers) > 0 {
-			ps.SetProviders(providers)
-			if provName, _ := opts["provider"].(string); provName != "" {
-				ps.SetActiveProvider(provName)
-			} else {
-				ps.SetActiveProvider(providers[0].Name)
-			}
-		}
-	}
-
 	mp := &mockPlatform{agent: agent}
 	sessPath := filepath.Join(workDir, "sessions.json")
 	e := core.NewEngine("e2e-test", agent, []core.Platform{mp}, sessPath)
@@ -277,54 +257,6 @@ func TestE2E_ClaudeCode_FullSessionCommands(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// E2E: /provider switch (requires multiple providers in config)
-// ---------------------------------------------------------------------------
-
-func runE2E_ProviderSwitch(t *testing.T, project string) {
-	e, mp, cleanup := setupE2E(t, project)
-	defer cleanup()
-
-	h := &e2eHelper{t: t, e: e, mp: mp, uk: sessionKey("e2e-provider")}
-
-	// Start a session
-	t.Log("[1] initial message")
-	h.sendAndWait("respond with exactly: PROV_INIT", 90*time.Second)
-
-	// /provider list
-	t.Log("[2] /provider list")
-	provList := h.sendAndWait("/provider list", 10*time.Second)
-	t.Logf("[2] providers: %.200s", provList)
-
-	// /provider switch to a different provider
-	t.Log("[3] /provider switch shengsuanyun")
-	switchReply := h.sendAndWait("/provider switch shengsuanyun", 10*time.Second)
-	t.Logf("[3] switch: %.120s", switchReply)
-
-	// Verify new provider works
-	t.Log("[4] message after switch")
-	reply4 := h.sendAndWait("respond with exactly: PROV_SWITCHED", 90*time.Second)
-	t.Logf("[4] reply: %.120s", reply4)
-
-	// /list should still work
-	t.Log("[5] /list after provider switch")
-	list := h.sendAndWait("/list", 10*time.Second)
-	if countSessions(list) < 1 {
-		t.Errorf("[5] /list broken after provider switch\n%s", list)
-	}
-	t.Log("[5] /list OK after provider switch")
-
-	t.Log("=== PROVIDER SWITCH PASSED ===")
-}
-
-func TestE2E_Codex_ProviderSwitch(t *testing.T) {
-	runE2E_ProviderSwitch(t, "e2e-codex")
-}
-
-func TestE2E_ClaudeCode_ProviderSwitch(t *testing.T) {
-	runE2E_ProviderSwitch(t, "e2e-claudecode")
-}
-
-// ---------------------------------------------------------------------------
 // E2E: Session persistence across restart (simulate by recreating engine)
 // ---------------------------------------------------------------------------
 
@@ -367,25 +299,6 @@ func runE2E_SessionPersistence(t *testing.T, project string) {
 		agent, err := core.CreateAgent(agentType, opts)
 		if err != nil {
 			t.Skipf("skip: %v", err)
-		}
-		if ps, ok := agent.(core.ProviderSwitcher); ok {
-			var providers []core.ProviderConfig
-			for _, ref := range proj.Agent.ProviderRefs {
-				for _, gp := range cfg.Providers {
-					if gp.Name == ref {
-						providers = append(providers, configProviderToCore(gp))
-						break
-					}
-				}
-			}
-			if len(providers) > 0 {
-				ps.SetProviders(providers)
-				if pn, _ := opts["provider"].(string); pn != "" {
-					ps.SetActiveProvider(pn)
-				} else {
-					ps.SetActiveProvider(providers[0].Name)
-				}
-			}
 		}
 		return agent
 	}

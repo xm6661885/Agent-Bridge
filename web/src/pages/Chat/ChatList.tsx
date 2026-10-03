@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { MessageSquare, Bot, User, Circle, ArrowRight } from 'lucide-react';
 import { Card, EmptyState, Badge } from '@/components/ui';
@@ -11,11 +10,11 @@ interface ChatEntry {
   latestSession: Session | null;
 }
 
-function timeAgo(iso: string, t: (k: string) => string): string {
+function timeAgo(iso: string): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return t('sessions.justNow');
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
@@ -23,7 +22,6 @@ function timeAgo(iso: string, t: (k: string) => string): string {
 }
 
 export default function ChatList() {
-  const { t } = useTranslation();
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -72,10 +70,10 @@ export default function ChatList() {
 
   return (
     <div className="animate-fade-in space-y-4 ">
-      <h2 className="text-lg font-bold text-gray-900 dark:text-white">{t('nav.chat')}</h2>
+      <h2 className="text-lg font-bold text-gray-900 dark:text-white">{"Chat"}</h2>
 
       {entries.length === 0 ? (
-        <EmptyState message={t('chat.noChats')} icon={MessageSquare} />
+        <EmptyState message={"No projects yet"} icon={MessageSquare} />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {entries.map(({ project, latestSession }) => {
@@ -107,7 +105,7 @@ export default function ChatList() {
                       </p>
                     ) : (
                       <p className="text-xs text-gray-400 dark:text-gray-500 italic">
-                        {t('chat.noMessages')}
+                        {"No messages yet"}
                       </p>
                     )}
                   </div>
@@ -121,8 +119,8 @@ export default function ChatList() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span>{project.sessions_count} {t('chat.sessions', 'sessions')}</span>
-                      {ts && <span className="text-gray-400">{timeAgo(ts, t)}</span>}
+                      <span>{project.sessions_count} {"Sessions"}</span>
+                      {ts && <span className="text-gray-400">{timeAgo(ts)}</span>}
                     </div>
                   </div>
                 </Card>

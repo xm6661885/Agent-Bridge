@@ -186,28 +186,6 @@ func TestParseSendArgs_AudioVideoFileMixed_StaySeparate(t *testing.T) {
 	}
 }
 
-func TestParseSendArgs_TTSOnly(t *testing.T) {
-	t.Setenv("AGENT_BRIDGE_PROJECT", "demo")
-	t.Setenv("AGENT_BRIDGE_SESSION_KEY", "telegram:123:456")
-
-	req, _, err := parseSendArgs([]string{"--tts", "hello voice"})
-	if err != nil {
-		t.Fatalf("parseSendArgs returned error: %v", err)
-	}
-	if req.Project != "demo" {
-		t.Fatalf("project = %q, want demo", req.Project)
-	}
-	if req.SessionKey != "telegram:123:456" {
-		t.Fatalf("session = %q, want telegram:123:456", req.SessionKey)
-	}
-	if req.TTSText != "hello voice" {
-		t.Fatalf("tts text = %q", req.TTSText)
-	}
-	if req.Message != "" {
-		t.Fatalf("message = %q, want empty", req.Message)
-	}
-}
-
 func TestParseSendArgs_AudioRejectsNonAudio(t *testing.T) {
 	dir := t.TempDir()
 	docPath := filepath.Join(dir, "report.txt")

@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import {
   Slash, Search, MessageSquarePlus, List, ArrowRightLeft, Eye, History,
-  Square, Brain, Cpu, Layers, Activity,
+  Square, Brain, Cpu, Layers,
   Terminal, Tag, Wrench, Trash2,
   FolderOpen, HelpCircle, User,
 } from 'lucide-react';
@@ -10,7 +9,7 @@ import { cn } from '@/lib/utils';
 
 export interface SlashCommand {
   cmd: string;
-  labelKey: string;
+  label: string;
   icon: React.ElementType;
   group: 'session' | 'settings' | 'info' | 'advanced';
   local?: boolean; // handled locally, not sent to bridge
@@ -18,32 +17,31 @@ export interface SlashCommand {
 
 export const slashCommands: SlashCommand[] = [
   // Session
-  { cmd: '/new', labelKey: 'cmd.new', icon: MessageSquarePlus, group: 'session' },
-  { cmd: '/list', labelKey: 'cmd.list', icon: List, group: 'session' },
-  { cmd: '/switch', labelKey: 'cmd.switch', icon: ArrowRightLeft, group: 'session' },
-  { cmd: '/current', labelKey: 'cmd.current', icon: Eye, group: 'session' },
-  { cmd: '/history', labelKey: 'cmd.history', icon: History, group: 'session' },
-  { cmd: '/stop', labelKey: 'cmd.stop', icon: Square, group: 'session' },
+  { cmd: '/new', label: "New session", icon: MessageSquarePlus, group: 'session' },
+  { cmd: '/list', label: "Session list", icon: List, group: 'session' },
+  { cmd: '/switch', label: "Switch session", icon: ArrowRightLeft, group: 'session' },
+  { cmd: '/current', label: "Current session", icon: Eye, group: 'session' },
+  { cmd: '/history', label: "History", icon: History, group: 'session' },
+  { cmd: '/stop', label: "Stop session", icon: Square, group: 'session' },
   // Settings
-  { cmd: '/model', labelKey: 'cmd.model', icon: Brain, group: 'settings' },
-  { cmd: '/effort', labelKey: 'cmd.effort', icon: Cpu, group: 'settings' },
-  { cmd: '/mode', labelKey: 'cmd.mode', icon: Layers, group: 'settings' },
-  { cmd: '/provider', labelKey: 'cmd.provider', icon: Activity, group: 'settings' },
+  { cmd: '/model', label: "Model", icon: Brain, group: 'settings' },
+  { cmd: '/effort', label: "Reasoning", icon: Cpu, group: 'settings' },
+  { cmd: '/mode', label: "Mode", icon: Layers, group: 'settings' },
   // Info
-  { cmd: '/help', labelKey: 'cmd.help', icon: HelpCircle, group: 'info' },
-  { cmd: '/whoami', labelKey: 'cmd.whoami', icon: User, group: 'info' },
-  { cmd: '/commands', labelKey: 'cmd.commands', icon: Terminal, group: 'info' },
+  { cmd: '/help', label: "Help", icon: HelpCircle, group: 'info' },
+  { cmd: '/whoami', label: "Who am I", icon: User, group: 'info' },
+  { cmd: '/commands', label: "All commands", icon: Terminal, group: 'info' },
   // Advanced
-  { cmd: '/dir', labelKey: 'cmd.dir', icon: FolderOpen, group: 'advanced' },
-  { cmd: '/alias', labelKey: 'cmd.alias', icon: Tag, group: 'advanced' },
-  { cmd: '/delete-mode', labelKey: 'cmd.deleteMode', icon: Trash2, group: 'advanced' },
+  { cmd: '/dir', label: "Work directory", icon: FolderOpen, group: 'advanced' },
+  { cmd: '/alias', label: "Aliases", icon: Tag, group: 'advanced' },
+  { cmd: '/delete-mode', label: "Delete mode", icon: Trash2, group: 'advanced' },
 ];
 
-const groupOrder: { key: string; labelKey: string }[] = [
-  { key: 'session', labelKey: 'cmd.groupSession' },
-  { key: 'settings', labelKey: 'cmd.groupSettings' },
-  { key: 'info', labelKey: 'cmd.groupInfo' },
-  { key: 'advanced', labelKey: 'cmd.groupAdvanced' },
+const groupOrder: { key: string; label: string }[] = [
+  { key: 'session', label: "Session" },
+  { key: 'settings', label: "Settings" },
+  { key: 'info', label: "Info" },
+  { key: 'advanced', label: "Advanced" },
 ];
 
 interface Props {
@@ -54,7 +52,6 @@ interface Props {
 }
 
 export default function CommandPalette({ open, onClose, onSelect, anchorRef }: Props) {
-  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -64,9 +61,9 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRef }: P
     if (!query) return slashCommands;
     const q = query.toLowerCase().replace(/^\//, '');
     return slashCommands.filter(
-      (c) => c.cmd.toLowerCase().includes(q) || t(c.labelKey).toLowerCase().includes(q),
+      (c) => c.cmd.toLowerCase().includes(q) || c.label.toLowerCase().includes(q),
     );
-  }, [query, t]);
+  }, [query]);
 
   useEffect(() => {
     if (open) {
@@ -132,7 +129,7 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRef }: P
             value={query}
             onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
             onKeyDown={handleKeyDown}
-            placeholder={t('cmd.search', 'Search commands...')}
+            placeholder={"Search commands..."}
             className="flex-1 bg-transparent text-sm text-gray-900 dark:text-white placeholder:text-gray-400 outline-none"
           />
         </div>
@@ -141,7 +138,7 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRef }: P
         {grouped.map((g) => (
           <div key={g.key} className="mb-1">
             <div className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-              {t(g.labelKey)}
+              {g.label}
             </div>
             {g.items.map((cmd) => {
               const idx = flatIdx++;
@@ -161,14 +158,14 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRef }: P
                 >
                   <Icon size={15} className={idx === activeIdx ? 'text-accent' : 'text-gray-400'} />
                   <span className="font-mono text-xs text-gray-500 dark:text-gray-400 w-24 text-left">{cmd.cmd}</span>
-                  <span className="flex-1 text-left truncate">{t(cmd.labelKey)}</span>
+                  <span className="flex-1 text-left truncate">{cmd.label}</span>
                 </button>
               );
             })}
           </div>
         ))}
         {filtered.length === 0 && (
-          <div className="text-center text-sm text-gray-400 py-6">{t('common.noData')}</div>
+          <div className="text-center text-sm text-gray-400 py-6">{"No data"}</div>
         )}
       </div>
     </div>

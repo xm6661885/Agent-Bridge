@@ -31,7 +31,7 @@ func TestAvailableModels_FallbackToModelsCache(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	t.Setenv("OPENAI_BASE_URL", srv.URL)
 
-	a := &Agent{activeIdx: -1}
+	a := &Agent{}
 	models := a.AvailableModels(context.Background())
 	if len(models) != 2 {
 		t.Fatalf("models length = %d, want 2, models=%v", len(models), models)
@@ -77,7 +77,7 @@ func TestAvailableModels_UsesModelCatalog(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	t.Setenv("OPENAI_BASE_URL", srv.URL)
 
-	a := &Agent{activeIdx: -1}
+	a := &Agent{}
 	models := a.AvailableModels(context.Background())
 
 	// 3 visible+supported: gpt-5.4, gpt-5.3-codex, MissingSlug (slug empty → display_name fallback)
@@ -101,7 +101,7 @@ func TestReadCodexModelCatalog_NoConfigFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CODEX_HOME", tmp)
 
-	a := &Agent{activeIdx: -1}
+	a := &Agent{}
 	models := a.AvailableModels(context.Background())
 
 	// No config.toml → no model_catalog.json → no models_cache.json

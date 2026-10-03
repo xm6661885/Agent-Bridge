@@ -267,7 +267,7 @@ func progressCardPayloadForTarget(p Platform, replyCtx any) bool {
 // SuppressStandaloneToolResultEvent is true when a platform opts into progress
 // styling (ProgressStyleProvider) but uses legacy mode. In that case tool_use
 // lines are still shown, but a separate chat message for EventToolResult is
-// skipped to avoid duplicate noise (e.g. Codex structured tool results on Feishu).
+// skipped to avoid duplicate noise (e.g. Codex structured tool results on card platforms).
 // Platforms without ProgressStyleProvider keep showing standalone tool results.
 func SuppressStandaloneToolResultEvent(p Platform) bool {
 	_, ok := p.(ProgressStyleProvider)

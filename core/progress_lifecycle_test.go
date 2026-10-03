@@ -120,10 +120,10 @@ func TestProgressLifecycle_PreservesAssistantTextAndCleansRecoveredDiagnostics(t
 }
 
 func TestStagedAttachments_SurviveConfigurationCommands(t *testing.T) {
-	for _, command := range []string{"/model gpt-4.1", "/effort high", "/mode yolo", "/provider use second"} {
+	for _, command := range []string{"/model gpt-4.1", "/effort high", "/mode yolo"} {
 		t.Run(command, func(t *testing.T) {
 			p := &stubPlatformEngine{n: "test"}
-			a := &stubModelModeAgent{providers: []ProviderConfig{{Name: "second"}}}
+			a := &stubModelModeAgent{}
 			e := NewEngine("test", a, []Platform{p}, "")
 			e.handleMessage(p, &Message{SessionKey: "test:user", ReplyCtx: "ctx", Images: []ImageAttachment{{Data: []byte("image")}}, Files: []FileAttachment{{FileName: "file.txt", Data: []byte("file")}}})
 			// Simulate a live process being recycled by the configuration command.

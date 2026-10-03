@@ -24,7 +24,6 @@ export interface ProjectDetail {
   collapse_tool_messages?: boolean;
   display_effective?: { show_context_indicator: boolean; show_workdir_indicator: boolean; reply_footer: boolean; cleanup_progress_on_complete: boolean; collapse_tool_messages: boolean };
   inject_sender?: boolean;
-  provider_refs?: string[];
   platform_configs?: PlatformConfigInfo[];
   platforms: { type: string; connected: boolean }[];
   sessions_count: number;

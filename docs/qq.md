@@ -131,7 +131,7 @@ Every prompt is answered by text. Send `/stop` to cancel. In groups only the mem
 |------------|----------------|-------------|
 | 文字 / Text | Yes | Yes |
 | 图片 / Image | Yes | No (文本描述) |
-| 语音 / Voice | Yes (需配置 STT) | No |
+| 语音 / Voice | Yes (作为音频文件附件) | No |
 | @提及 / @mention | Yes (忽略) | — |
 
 ## 常见问题 / FAQ

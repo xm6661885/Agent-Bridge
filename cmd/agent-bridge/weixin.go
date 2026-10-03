@@ -560,7 +560,7 @@ Commands:
 
 Options:
   --config <path>           Path to config file
-  --project <name>          Target project (created if missing, like feishu setup)
+  --project <name>          Target project (created if missing)
   --platform-index <n>      1-based weixin platform index in project (default: first)
   --token <bearer>          Existing ilink bot token (bind / setup with token)
   --api-url <url>           ilink base URL (default https://ilinkai.weixin.qq.com)

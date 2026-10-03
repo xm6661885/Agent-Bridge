@@ -402,11 +402,11 @@ func TestSessionManager_InvalidateForAgent(t *testing.T) {
 
 func TestSessionManager_UserMeta(t *testing.T) {
 	sm := NewSessionManager("")
-	sm.GetOrCreateActive("feishu:oc_abc:ou_xyz")
+	sm.GetOrCreateActive("telegram:oc_abc:ou_xyz")
 
 	// Set UserName
-	sm.UpdateUserMeta("feishu:oc_abc:ou_xyz", "Zhang San", "")
-	meta := sm.GetUserMeta("feishu:oc_abc:ou_xyz")
+	sm.UpdateUserMeta("telegram:oc_abc:ou_xyz", "Zhang San", "")
+	meta := sm.GetUserMeta("telegram:oc_abc:ou_xyz")
 	if meta == nil || meta.UserName != "Zhang San" {
 		t.Errorf("expected UserName='Zhang San', got %+v", meta)
 	}
@@ -415,15 +415,15 @@ func TestSessionManager_UserMeta(t *testing.T) {
 	}
 
 	// Merge: add ChatName without losing UserName
-	sm.UpdateUserMeta("feishu:oc_abc:ou_xyz", "", "Test Group")
-	meta = sm.GetUserMeta("feishu:oc_abc:ou_xyz")
+	sm.UpdateUserMeta("telegram:oc_abc:ou_xyz", "", "Test Group")
+	meta = sm.GetUserMeta("telegram:oc_abc:ou_xyz")
 	if meta.UserName != "Zhang San" || meta.ChatName != "Test Group" {
 		t.Errorf("expected merge, got %+v", meta)
 	}
 
 	// No-op for empty values
-	sm.UpdateUserMeta("feishu:oc_abc:ou_xyz", "", "")
-	meta = sm.GetUserMeta("feishu:oc_abc:ou_xyz")
+	sm.UpdateUserMeta("telegram:oc_abc:ou_xyz", "", "")
+	meta = sm.GetUserMeta("telegram:oc_abc:ou_xyz")
 	if meta.UserName != "Zhang San" || meta.ChatName != "Test Group" {
 		t.Errorf("expected no change, got %+v", meta)
 	}
@@ -439,12 +439,12 @@ func TestSessionManager_UserMetaPersistence(t *testing.T) {
 	path := filepath.Join(dir, "sessions.json")
 
 	sm1 := NewSessionManager(path)
-	sm1.NewSession("feishu:oc_abc:ou_xyz", "test")
-	sm1.UpdateUserMeta("feishu:oc_abc:ou_xyz", "Zhang San", "Group Name")
+	sm1.NewSession("telegram:oc_abc:ou_xyz", "test")
+	sm1.UpdateUserMeta("telegram:oc_abc:ou_xyz", "Zhang San", "Group Name")
 	sm1.Save()
 
 	sm2 := NewSessionManager(path)
-	meta := sm2.GetUserMeta("feishu:oc_abc:ou_xyz")
+	meta := sm2.GetUserMeta("telegram:oc_abc:ou_xyz")
 	if meta == nil || meta.UserName != "Zhang San" || meta.ChatName != "Group Name" {
 		t.Errorf("expected persisted meta, got %+v", meta)
 	}
@@ -580,15 +580,15 @@ func TestParseSessionKey(t *testing.T) {
 		wantUser     string
 	}{
 		{
-			key:          "feishu:oc_abc123:ou_xyz789",
-			wantPlatform: "feishu",
-			wantBaseChat: "feishu:oc_abc123",
+			key:          "telegram:oc_abc123:ou_xyz789",
+			wantPlatform: "telegram",
+			wantBaseChat: "telegram:oc_abc123",
 			wantUser:     "ou_xyz789",
 		},
 		{
-			key:          "feishu:oc_abc123",
-			wantPlatform: "feishu",
-			wantBaseChat: "feishu:oc_abc123",
+			key:          "telegram:oc_abc123",
+			wantPlatform: "telegram",
+			wantBaseChat: "telegram:oc_abc123",
 			wantUser:     "",
 		},
 		{
@@ -629,8 +629,8 @@ func TestParseSessionKey(t *testing.T) {
 
 func TestPruneDuplicateSessions_NoDuplicates(t *testing.T) {
 	sm := NewSessionManager("")
-	sm.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	sm.GetOrCreateActive("feishu:oc_chat2:ou_user1") // Different chat, no duplicate
+	sm.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	sm.GetOrCreateActive("telegram:oc_chat2:ou_user1") // Different chat, no duplicate
 
 	result := sm.PruneDuplicateSessions(false)
 	if len(result.RemovedSessions) != 0 {
@@ -642,8 +642,8 @@ func TestPruneDuplicateSessions_DifferentChats(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Create sessions for different chats with different users - should not be considered duplicates
-	s1 := sm.GetOrCreateActive("feishu:oc_chatA:ou_user1")
-	s2 := sm.GetOrCreateActive("feishu:oc_chatB:ou_user1") // Different chat
+	s1 := sm.GetOrCreateActive("telegram:oc_chatA:ou_user1")
+	s2 := sm.GetOrCreateActive("telegram:oc_chatB:ou_user1") // Different chat
 
 	// Add history to both
 	s1.AddHistory("user", "msg to chatA")
@@ -667,8 +667,8 @@ func TestPruneDuplicateSessions_SameChatDifferentUsers(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Same chat, different users - these are "duplicates" from chat perspective
-	s1 := sm.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	s2 := sm.NewSession("feishu:oc_chat1:ou_user2", "user2-session")
+	s1 := sm.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	s2 := sm.NewSession("telegram:oc_chat1:ou_user2", "user2-session")
 
 	// Add history
 	s1.AddHistory("user", "msg from user1")
@@ -709,8 +709,8 @@ func TestPruneDuplicateSessions_NoMergeKeepsHistory(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Same chat, different users
-	s1 := sm.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	s2 := sm.NewSession("feishu:oc_chat1:ou_user2", "user2-session")
+	s1 := sm.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	s2 := sm.NewSession("telegram:oc_chat1:ou_user2", "user2-session")
 
 	// s1 has history, s2 is empty
 	s1.AddHistory("user", "msg from user1")
@@ -751,8 +751,8 @@ func TestPruneDuplicateSessions_NoMergeKeepsBothWithHistory(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Same chat, different users, both with history
-	s1 := sm.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	s2 := sm.NewSession("feishu:oc_chat1:ou_user2", "user2-session")
+	s1 := sm.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	s2 := sm.NewSession("telegram:oc_chat1:ou_user2", "user2-session")
 
 	s1.AddHistory("user", "msg from user1")
 	s2.AddHistory("user", "msg from user2")
@@ -760,9 +760,9 @@ func TestPruneDuplicateSessions_NoMergeKeepsBothWithHistory(t *testing.T) {
 	// Make sure both are recognized as duplicates of the same chat.
 	// baseChat is derived from the user key via ParseSessionKey, not
 	// stored on the Session struct.
-	_, s1Base, _ := ParseSessionKey("feishu:oc_chat1:ou_user1")
-	_, s2Base, _ := ParseSessionKey("feishu:oc_chat1:ou_user2")
-	if s1Base != "feishu:oc_chat1" || s2Base != "feishu:oc_chat1" {
+	_, s1Base, _ := ParseSessionKey("telegram:oc_chat1:ou_user1")
+	_, s2Base, _ := ParseSessionKey("telegram:oc_chat1:ou_user2")
+	if s1Base != "telegram:oc_chat1" || s2Base != "telegram:oc_chat1" {
 		t.Fatalf("test setup: both sessions must share baseChat, got %q and %q",
 			s1Base, s2Base)
 	}
@@ -795,9 +795,9 @@ func TestPruneDuplicateSessions_ThreadIsolation(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Same chat, different threads
-	s1 := sm.GetOrCreateActive("feishu:oc_chat1:root:thread1")
-	s2 := sm.NewSession("feishu:oc_chat1:root:thread2", "thread2-session")
-	s3 := sm.NewSession("feishu:oc_chat1:ou_user1", "user-session")
+	s1 := sm.GetOrCreateActive("telegram:oc_chat1:root:thread1")
+	s2 := sm.NewSession("telegram:oc_chat1:root:thread2", "thread2-session")
+	s3 := sm.NewSession("telegram:oc_chat1:ou_user1", "user-session")
 
 	// All have history
 	s1.AddHistory("user", "msg in thread1")
@@ -833,9 +833,9 @@ func TestPruneEmptySessions(t *testing.T) {
 	sm := NewSessionManager("")
 
 	// Create sessions
-	s1 := sm.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	s2 := sm.NewSession("feishu:oc_chat2:ou_user1", "empty-session")
-	s3 := sm.NewSession("feishu:oc_chat3:ou_user1", "another-empty")
+	s1 := sm.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	s2 := sm.NewSession("telegram:oc_chat2:ou_user1", "empty-session")
+	s3 := sm.NewSession("telegram:oc_chat3:ou_user1", "another-empty")
 
 	// Only s1 has history
 	s1.AddHistory("user", "msg1")
@@ -865,8 +865,8 @@ func TestPruneDuplicateSessions_Persistence(t *testing.T) {
 	path := filepath.Join(dir, "sessions.json")
 
 	sm1 := NewSessionManager(path)
-	s1 := sm1.GetOrCreateActive("feishu:oc_chat1:ou_user1")
-	s2 := sm1.NewSession("feishu:oc_chat1:ou_user2", "duplicate")
+	s1 := sm1.GetOrCreateActive("telegram:oc_chat1:ou_user1")
+	s2 := sm1.NewSession("telegram:oc_chat1:ou_user2", "duplicate")
 
 	s1.AddHistory("user", "msg1")
 	s2.AddHistory("user", "msg2")
@@ -1085,7 +1085,7 @@ func TestKnownAgentSessionIDs_ReproducesNewCommandBug(t *testing.T) {
 }
 
 // TestKnownAgentSessionIDs_ResetAllSessionsBug simulates resetAllSessions
-// clearing all IDs (management API provider switch). Past IDs should keep
+// clearing all IDs (management API session reset). Past IDs should keep
 // all sessions visible.
 func TestKnownAgentSessionIDs_ResetAllSessionsBug(t *testing.T) {
 	sm := NewSessionManager("")

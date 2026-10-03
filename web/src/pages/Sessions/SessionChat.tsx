@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, Send, User, Bot, RotateCw, Circle, WifiOff,
@@ -215,24 +214,23 @@ function ImageBlock({ url }: { url: string }) {
 // ── Connection status badge ──────────────────────────────────
 
 function StatusBadge({ status }: { status: BridgeStatus }) {
-  const { t } = useTranslation();
   if (status === 'connected') {
     return (
       <span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full">
-        <Circle size={5} className="fill-current" /> {t('sessions.bridgeConnected', 'connected')}
+        <Circle size={5} className="fill-current" /> {"connected"}
       </span>
     );
   }
   if (status === 'connecting' || status === 'registering') {
     return (
       <span className="flex items-center gap-1 text-[10px] text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 px-1.5 py-0.5 rounded-full">
-        <Loader2 size={9} className="animate-spin" /> {t('sessions.bridgeConnecting', 'connecting...')}
+        <Loader2 size={9} className="animate-spin" /> {"connecting..."}
       </span>
     );
   }
   return (
     <span className="flex items-center gap-1 text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-full">
-      <WifiOff size={9} /> {t('sessions.bridgeDisconnected', 'disconnected')}
+      <WifiOff size={9} /> {"disconnected"}
     </span>
   );
 }
@@ -258,7 +256,6 @@ function SessionMsgCopyButton({ text }: { text: string }) {
 // ── Main component ───────────────────────────────────────────
 
 export default function SessionChat() {
-  const { t } = useTranslation();
   const { project, id } = useParams<{ project: string; id: string }>();
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -463,14 +460,14 @@ export default function SessionChat() {
           </div>
         </div>
         <Button size="sm" variant="ghost" onClick={fetchSession}>
-          <RotateCw size={14} /> {t('common.refresh')}
+          <RotateCw size={14} /> {"Refresh"}
         </Button>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto py-6 space-y-5">
         {messages.length === 0 && !loading && (
-          <p className="text-center text-sm text-gray-400 py-12">{t('sessions.noMessages')}</p>
+          <p className="text-center text-sm text-gray-400 py-12">{"No messages yet"}</p>
         )}
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
@@ -490,7 +487,7 @@ export default function SessionChat() {
                 msg.streaming && 'animate-pulse-subtle',
               )}>
                 {isEmpty ? (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 italic">{t('chat.unsupportedMessage', '[Unsupported message]')}</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 italic">{"[Unsupported message]"}</p>
                 ) : msg.format === 'card' ? (
                   <CardBlock card={msg.card} onAction={handleCardAction} />
                 ) : msg.format === 'buttons' && msg.buttons ? (
@@ -544,7 +541,7 @@ export default function SessionChat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={t('sessions.messageInput')}
+              placeholder={"Message"}
               className="flex-1 px-4 py-3 text-sm rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors placeholder:text-gray-400"
               disabled={sending}
             />
@@ -563,17 +560,17 @@ export default function SessionChat() {
         ) : !bridgeCfg ? (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
             <WifiOff size={14} />
-            <span>{t('sessions.bridgeNotAvailable', 'Bridge not available. Enable [bridge] in config.toml to chat from web.')}</span>
+            <span>{"Bridge not available. Enable [bridge] in config.toml to chat from web."}</span>
           </div>
         ) : bridgeStatus === 'disconnected' || bridgeStatus === 'error' ? (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
             <WifiOff size={14} />
-            <span>{t('sessions.bridgeDisconnected', 'Bridge disconnected.')}</span>
+            <span>{"disconnected"}</span>
           </div>
         ) : (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
             <Loader2 size={14} className="animate-spin" />
-            <span>{t('sessions.bridgeConnecting', 'Connecting to bridge...')}</span>
+            <span>{"connecting..."}</span>
           </div>
         )}
       </div>

@@ -11,7 +11,7 @@ import (
 // StreamPreviewCfg controls the streaming preview behavior.
 type StreamPreviewCfg struct {
 	Enabled           bool     // global toggle
-	DisabledPlatforms []string // platforms where streaming preview is disabled (e.g. "feishu")
+	DisabledPlatforms []string // platforms where streaming preview is disabled (e.g. "weixin")
 	IntervalMs        int      // minimum ms between updates (default 1500)
 	MinDeltaChars     int      // minimum new chars before sending an update (default 30)
 	MaxChars          int      // max preview length (default 2000)
@@ -51,76 +51,6 @@ type streamPreview struct {
 	timerStop chan struct{} // closed when preview ends
 
 	pendingStatus CardStatus // last status set via setStatus(); applied on recovery
-}
-
-// ToolStepKind identifies the kind of progress row shown in rich cards.
-type ToolStepKind string
-
-const (
-	ToolStepKindTool     ToolStepKind = "tool"
-	ToolStepKindThinking ToolStepKind = "thinking"
-)
-
-// ToolStep is one summarized progress row shown in rich progress cards.
-type ToolStep struct {
-	Kind     ToolStepKind // progress row kind; empty means tool for backward compatibility
-	Name     string       // tool name (e.g. "Bash", "Edit")
-	Summary  string       // human-readable summary shown in the card
-	Result   string       // optional tool output/result summary
-	Status   string       // optional tool status (e.g. completed/failed)
-	ExitCode *int         // optional process exit code
-	Success  *bool        // optional success flag
-	Done     bool         // true once a tool result has been observed
-}
-
-// RichCardSupporter is an optional interface for platforms that can build
-// native rich cards combining tool steps, markdown content, and a multi-line
-// status footer.
-//
-// statusFooter is a pre-composed multi-line string assembled by the engine
-// (typically one line per: elapsed time, model · effort · ctx, workdir).
-// Pass empty string to hide the footer entirely. Lines are separated by '\n';
-// the platform implementation is expected to render each line as its own
-// dim-styled element so they don't visually merge with the body markdown.
-//
-// (Phase B refactor: previously took elapsed time.Duration; now the engine
-// owns elapsed-time formatting so it can apply i18n + project-level toggles
-// uniformly with the rest of the footer.)
-type RichCardSupporter interface {
-	BuildRichCard(status CardStatus, title string, steps []ToolStep, markdown string, streaming bool, statusFooter string) string
-}
-
-// RichCardMarkdownResolver is an optional interface for platforms that need to
-// pre-process rich-card markdown before it is rendered or streamed.
-//
-// Feishu uses this to turn markdown image URLs into real uploaded image keys:
-// intermediate streaming frames may return quickly without waiting for uploads,
-// while final frames may wait briefly so the completed card can embed images.
-type RichCardMarkdownResolver interface {
-	ResolveRichCardMarkdown(ctx context.Context, markdown string, final bool) string
-}
-
-// MarkdownTableSplitter is an optional interface for platforms that need
-// platform-specific markdown table chunking before final send.
-type MarkdownTableSplitter interface {
-	SplitMarkdownByTables(md string, maxTables int) []string
-}
-
-// RichCardTextStreamer is an optional interface for platforms that support
-// per-element streaming text updates on rich cards (e.g. Lark/Feishu's
-// cardkit-v1 streaming text update API). When implemented, the engine routes
-// EventText growth through StreamRichCardText instead of full-card updates,
-// giving the client a native typewriter rendering effect.
-//
-// Returns ErrNotSupported when the specific preview handle was created
-// without a streamable card entity (fallback path); the engine then falls
-// back to the standard MessageUpdater full-card update.
-type RichCardTextStreamer interface {
-	// StreamRichCardText pushes the latest fullText to the streaming-text
-	// element of the rich card identified by previewHandle. The platform
-	// implementation is responsible for serializing concurrent calls and
-	// maintaining a monotonic sequence counter per handle.
-	StreamRichCardText(ctx context.Context, previewHandle any, fullText string) error
 }
 
 // PreviewStarter is an optional interface for platforms that can initiate a
@@ -466,7 +396,7 @@ func (sp *streamPreview) finish(finalText, statusFooter string) bool {
 
 	// If the final text is identical to what was last sent via UpdateMessage
 	// AND no status footer needs to be applied, skip the redundant API call.
-	// This prevents duplicate messages on platforms (e.g. Feishu) where
+	// This prevents duplicate messages on platforms where
 	// patching with identical content may fail. We must NOT skip when a
 	// statusFooter is pending — the body may match but the footer hasn't
 	// been rendered yet, and dropping the call would silently lose it.

@@ -37,7 +37,7 @@ func TestAppendImageRefs(t *testing.T) {
 	}
 }
 
-// Images arriving without a filename (Feishu sends bytes + MIME only) must
+// Images arriving without a filename (Telegram sends bytes + MIME only) must
 // still land on disk with a usable extension.
 func TestSaveFilesToDisk_ImageWithoutFileName(t *testing.T) {
 	dir := t.TempDir()

@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next';
 import {
   X, MessageSquare, Circle, User, Bot, Plus,
 } from 'lucide-react';
@@ -27,7 +26,6 @@ interface Props {
 }
 
 export default function SessionDrawer({ open, onClose, sessions, currentSessionId, onSelect, onNewSession }: Props) {
-  const { t } = useTranslation();
 
   return (
     <>
@@ -47,14 +45,14 @@ export default function SessionDrawer({ open, onClose, sessions, currentSessionI
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200/80 dark:border-white/[0.08] shrink-0">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{t('chat.sessions')}</h3>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{"Sessions"}</h3>
           <div className="flex items-center gap-1">
             {onNewSession && (
               <button
                 type="button"
                 onClick={onNewSession}
                 className="p-1.5 rounded-lg text-gray-400 hover:text-accent hover:bg-accent/10 transition-colors"
-                title={t('cmd.new')}
+                title={"New session"}
               >
                 <Plus size={16} />
               </button>
@@ -72,7 +70,7 @@ export default function SessionDrawer({ open, onClose, sessions, currentSessionI
         {/* Session list */}
         <div className="flex-1 overflow-y-auto py-2 px-2">
           {sessions.length === 0 ? (
-            <div className="text-center text-sm text-gray-400 py-8">{t('sessions.noSessions')}</div>
+            <div className="text-center text-sm text-gray-400 py-8">{"No sessions"}</div>
           ) : (
             sessions.map((s) => {
               const isCurrent = s.id === currentSessionId;

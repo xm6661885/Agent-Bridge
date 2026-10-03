@@ -90,6 +90,15 @@ func TestLaunchdStatusUsesUserDomainWhenGUIDomainUnavailable(t *testing.T) {
 		}
 	}
 
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Dir(launchdPlistPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launchdPlistPath(), []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	mgr := &launchdManager{}
 	st, err := mgr.Status()
 	if err != nil {

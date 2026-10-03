@@ -23,7 +23,7 @@ func TestStripMarkdown(t *testing.T) {
 		// Regression: underscore forms must NOT be stripped, since the same
 		// patterns appear in legitimate identifiers. Stripping them used to
 		// produce e.g. "mysnakecase_var" and "init", corrupting code
-		// references in TTS / LINE / WeChat output.
+		// references in plain-text / WeChat output.
 		{"snake_case identifier", "call my_func_name() to start", "call my_func_name() to start"},
 		{"two-underscore snake_case", "use module_name_var here", "use module_name_var here"},
 		{"python dunder", "Python's __init__ method", "Python's __init__ method"},

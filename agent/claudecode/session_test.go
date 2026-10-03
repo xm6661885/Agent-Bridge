@@ -638,7 +638,7 @@ func makeFiller(n int) string {
 // TestHandleUserEmitsToolResult is a regression test for the bug where
 // claudeSession.handleUser silently dropped tool_result content blocks
 // (only logging when is_error=true) instead of emitting EventToolResult.
-// Without this event, engine never sees tool output and the Feishu/Slack/
+// Without this event, engine never sees tool output and the IM/Slack/
 // Discord progress card never renders tool results — only the final
 // assistant text reaches the user.
 //

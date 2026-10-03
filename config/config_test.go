@@ -325,7 +325,6 @@ func TestEffectiveDisplayHideAgentFooter(t *testing.T) {
 
 func TestValidateProjectDisplayConfig(t *testing.T) {
 	mode := "verbose"
-	cardMode := "modern"
 	negativeHistoryMaxLen := -1
 
 	tests := []struct {
@@ -337,11 +336,6 @@ func TestValidateProjectDisplayConfig(t *testing.T) {
 			name:    "invalid project display mode",
 			display: &DisplayConfig{Mode: &mode},
 			wantErr: `projects[0].display.mode must be "full", "compact", or "quiet"`,
-		},
-		{
-			name:    "invalid project card mode",
-			display: &DisplayConfig{CardMode: &cardMode},
-			wantErr: `projects[0].display.card_mode must be "legacy" or "rich"`,
 		},
 		{
 			name:    "invalid project history max len",
@@ -411,13 +405,6 @@ func TestLoad_ResolvesEnvPlaceholders(t *testing.T) {
  note = "prefix-${HOOK_TOKEN}-suffix"
  retries = 3
 
- [[projects.agent.providers]]
- name = "relay"
- api_key = "${OPENAI_API_KEY}"
- base_url = "https://relay.example/${HOOK_TOKEN}"
-
- [projects.agent.providers.env]
- HTTP_PROXY = "${HTTP_PROXY}"
 
  [[projects.platforms]]
  type = "telegram"
@@ -444,12 +431,6 @@ func TestLoad_ResolvesEnvPlaceholders(t *testing.T) {
 	if got := stringMapValue(cfg.Projects[0].Agent.Options, "note"); got != "prefix-hook-secret-suffix" {
 		t.Fatalf("note = %q, want prefix-hook-secret-suffix", got)
 	}
-	if got := cfg.Projects[0].Agent.Providers[0].APIKey; got != "sk-test" {
-		t.Fatalf("provider api_key = %q, want sk-test", got)
-	}
-	if got := cfg.Projects[0].Agent.Providers[0].Env["HTTP_PROXY"]; got != "http://127.0.0.1:7890" {
-		t.Fatalf("provider env HTTP_PROXY = %q, want http://127.0.0.1:7890", got)
-	}
 	if got := stringMapValue(cfg.Projects[0].Platforms[0].Options, "token"); got != "tg-secret" {
 		t.Fatalf("platform token = %q, want tg-secret", got)
 	}
@@ -471,12 +452,6 @@ func TestLoad_MissingEnvPlaceholderBecomesEmptyString(t *testing.T) {
  work_dir = "/tmp/demo"
  retries = 5
 
- [[projects.agent.providers]]
- name = "relay"
- api_key = "${MISSING_API_KEY}"
-
- [projects.agent.providers.env]
- HTTPS_PROXY = "${MISSING_PROXY}"
 
  [[projects.platforms]]
  type = "telegram"
@@ -490,12 +465,6 @@ func TestLoad_MissingEnvPlaceholderBecomesEmptyString(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if got := cfg.Projects[0].Agent.Providers[0].APIKey; got != "" {
-		t.Fatalf("provider api_key = %q, want empty", got)
-	}
-	if got := cfg.Projects[0].Agent.Providers[0].Env["HTTPS_PROXY"]; got != "" {
-		t.Fatalf("provider env HTTPS_PROXY = %q, want empty", got)
-	}
 	if got := stringMapValue(cfg.Projects[0].Platforms[0].Options, "token"); got != "prefix--suffix" {
 		t.Fatalf("platform token = %q, want prefix--suffix", got)
 	}
@@ -516,67 +485,8 @@ func TestListProjects(t *testing.T) {
 	}
 }
 
-func TestProviderConfig_SaveActiveProviderAndGetProjectProviders(t *testing.T) {
-	writeTestConfig(t, providerConfigTOML)
-
-	if err := SaveActiveProvider("demo", "backup"); err != nil {
-		t.Fatalf("SaveActiveProvider() error: %v", err)
-	}
-
-	providers, active, err := GetProjectProviders("demo")
-	if err != nil {
-		t.Fatalf("GetProjectProviders() error: %v", err)
-	}
-	if active != "backup" {
-		t.Fatalf("active provider = %q, want backup", active)
-	}
-	if len(providers) != 2 {
-		t.Fatalf("provider count = %d, want 2", len(providers))
-	}
-}
-
-func TestProviderConfig_AddAndRemove(t *testing.T) {
-	writeTestConfig(t, providerConfigTOML)
-
-	newProvider := ProviderConfig{Name: "relay", APIKey: "sk-relay", BaseURL: "https://example.com"}
-	if err := AddProviderToConfig("demo", newProvider); err != nil {
-		t.Fatalf("AddProviderToConfig() error: %v", err)
-	}
-	if err := AddProviderToConfig("demo", newProvider); err == nil {
-		t.Fatal("AddProviderToConfig() duplicate provider: expected error")
-	}
-
-	cfg := readTestConfig(t)
-	if len(cfg.Projects[0].Agent.Providers) != 3 {
-		t.Fatalf("provider count after add = %d, want 3", len(cfg.Projects[0].Agent.Providers))
-	}
-
-	if err := RemoveProviderFromConfig("demo", "relay"); err != nil {
-		t.Fatalf("RemoveProviderFromConfig() error: %v", err)
-	}
-	if err := RemoveProviderFromConfig("demo", "relay"); err == nil {
-		t.Fatal("RemoveProviderFromConfig() missing provider: expected error")
-	}
-}
-
-func TestProviderConfig_SaveProviderModel(t *testing.T) {
-	writeTestConfig(t, providerConfigTOML)
-
-	if err := SaveProviderModel("demo", "primary", "gpt-5.4"); err != nil {
-		t.Fatalf("SaveProviderModel() error: %v", err)
-	}
-
-	cfg := readTestConfig(t)
-	if got := cfg.Projects[0].Agent.Providers[0].Model; got != "gpt-5.4" {
-		t.Fatalf("provider model = %q, want gpt-5.4", got)
-	}
-	if err := SaveProviderModel("demo", "missing", "gpt-4.1"); err == nil {
-		t.Fatal("SaveProviderModel() missing provider: expected error")
-	}
-}
-
 func TestSaveAgentModel(t *testing.T) {
-	writeTestConfig(t, providerConfigTOML)
+	writeTestConfig(t, agentConfigTOML)
 
 	if err := SaveAgentModel("demo", "gpt-5.4"); err != nil {
 		t.Fatalf("SaveAgentModel() error: %v", err)
@@ -589,15 +499,12 @@ func TestSaveAgentModel(t *testing.T) {
 	if got, _ := cfg.Projects[0].Agent.Options["mode"].(string); got != "default" {
 		t.Fatalf("agent.options.mode = %q, want default", got)
 	}
-	if got, _ := cfg.Projects[0].Agent.Options["provider"].(string); got != "primary" {
-		t.Fatalf("agent.options.provider = %q, want primary", got)
-	}
-	if len(cfg.Projects[0].Agent.Providers) != 2 {
-		t.Fatalf("provider count = %d, want 2", len(cfg.Projects[0].Agent.Providers))
+	if got, _ := cfg.Projects[0].Agent.Options["reasoning_effort"].(string); got != "high" {
+		t.Fatalf("agent.options.reasoning_effort = %q, want high", got)
 	}
 }
 
-const providerConfigWithCommentsTOML = `# This is my config file
+const agentConfigWithCommentsTOML = `# This is my config file
 # Very important - do not lose this!
 custom_top = "keep_me"
 
@@ -610,16 +517,8 @@ type = "claudecode"
 
 [projects.agent.options]
 mode = "default"
-provider = "primary"
+reasoning_effort = "high"
 custom_option = "still_here" # keep inline comment
-
-[[projects.agent.providers]]
-name = "primary"
-api_key = "sk-primary"
-
-[[projects.agent.providers]]
-name = "backup"
-api_key = "sk-backup"
 
 [[projects.platforms]]
 type = "telegram"
@@ -628,53 +527,8 @@ type = "telegram"
 token = "test-token"
 `
 
-func TestSaveActiveProvider_PreservesCommentsAndUnknownFields(t *testing.T) {
-	writeTestConfig(t, providerConfigWithCommentsTOML)
-
-	if err := SaveActiveProvider("demo", "backup"); err != nil {
-		t.Fatalf("SaveActiveProvider() error: %v", err)
-	}
-
-	content, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "# This is my config file") {
-		t.Fatalf("expected top comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, "# Very important - do not lose this!") {
-		t.Fatalf("expected second comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `custom_top = "keep_me"`) {
-		t.Fatalf("expected unknown top-level field to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `custom_option = "still_here"`) {
-		t.Fatalf("expected unknown options field to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, "keep inline comment") {
-		t.Fatalf("expected inline comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `mode = "default"`) {
-		t.Fatalf("expected mode to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `provider = "backup"`) {
-		t.Fatalf("expected provider to be updated to backup, got:\n%s", text)
-	}
-	if !strings.Contains(text, `work_dir = "/tmp/demo"`) {
-		t.Fatalf("expected work_dir to be preserved, got:\n%s", text)
-	}
-
-	cfg := readTestConfig(t)
-	active, _ := cfg.Projects[0].Agent.Options["provider"].(string)
-	if active != "backup" {
-		t.Fatalf("active provider = %q, want backup", active)
-	}
-}
-
 func TestSaveAgentModel_PreservesCommentsAndUnknownFields(t *testing.T) {
-	writeTestConfig(t, providerConfigWithCommentsTOML)
+	writeTestConfig(t, agentConfigWithCommentsTOML)
 
 	if err := SaveAgentModel("demo", "gpt-5.4"); err != nil {
 		t.Fatalf("SaveAgentModel() error: %v", err)
@@ -692,40 +546,16 @@ func TestSaveAgentModel_PreservesCommentsAndUnknownFields(t *testing.T) {
 	if !strings.Contains(text, `custom_option = "still_here"`) {
 		t.Fatalf("expected unknown options field to be preserved, got:\n%s", text)
 	}
-	if !strings.Contains(text, `provider = "primary"`) {
-		t.Fatalf("expected provider to be preserved, got:\n%s", text)
+	if !strings.Contains(text, `reasoning_effort = "high"`) {
+		t.Fatalf("expected reasoning_effort to be preserved, got:\n%s", text)
 	}
 	if !strings.Contains(text, `model = "gpt-5.4"`) {
 		t.Fatalf("expected model to be set, got:\n%s", text)
 	}
 }
 
-func TestSaveProviderModel_PreservesCommentsAndUnknownFields(t *testing.T) {
-	writeTestConfig(t, providerConfigWithCommentsTOML)
-
-	if err := SaveProviderModel("demo", "primary", "gpt-5.4"); err != nil {
-		t.Fatalf("SaveProviderModel() error: %v", err)
-	}
-
-	content, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "# This is my config file") {
-		t.Fatalf("expected top comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `custom_option = "still_here"`) {
-		t.Fatalf("expected unknown options field to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `model = "gpt-5.4"`) {
-		t.Fatalf("expected model to be set in provider, got:\n%s", text)
-	}
-}
-
 func TestSaveDisplayConfig_PreservesComments(t *testing.T) {
-	configWithDisplay := providerConfigWithCommentsTOML + `
+	configWithDisplay := agentConfigWithCommentsTOML + `
 [display]
 # display settings below
 thinking_messages = true
@@ -759,241 +589,6 @@ custom_display = "keep" # also keep
 	}
 	if !strings.Contains(text, `tool_messages = false`) {
 		t.Fatalf("expected tool_messages to be set, got:\n%s", text)
-	}
-}
-
-func TestSaveTTSMode_PreservesComments(t *testing.T) {
-	configWithTTS := providerConfigWithCommentsTOML + `
-[tts]
-# tts config
-tts_mode = "auto"
-`
-	writeTestConfig(t, configWithTTS)
-
-	if err := SaveTTSMode("always"); err != nil {
-		t.Fatalf("SaveTTSMode() error: %v", err)
-	}
-
-	content, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "# This is my config file") {
-		t.Fatalf("expected top comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, "# tts config") {
-		t.Fatalf("expected tts comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `tts_mode = "always"`) {
-		t.Fatalf("expected tts_mode to be updated, got:\n%s", text)
-	}
-}
-
-func TestResolveTTSConfigForProject_AgentOverrides(t *testing.T) {
-	raw := `
-[tts]
-enabled = true
-provider = "minimax"
-voice = "global-voice"
-voice_id = "global-id"
-speed = 1.1
-language_type = "Chinese"
-tts_mode = "voice_only"
-max_text_len = 200
-
-[tts.agents.assistant]
-voice_id = "Chinese (Mandarin)_Crisp_Girl"
-speed = 0.98
-max_text_len = 120
-
-[tts.agents.reviewer]
-voice = "Chinese (Mandarin)_Gentle_Senior"
-`
-	var cfg Config
-	if _, err := toml.Decode(raw, &cfg); err != nil {
-		t.Fatalf("decode config: %v", err)
-	}
-
-	assistant := ResolveTTSConfigForProject(cfg.TTS, "assistant")
-	if !assistant.Enabled {
-		t.Fatal("expected assistant TTS enabled")
-	}
-	if assistant.Provider != "minimax" {
-		t.Fatalf("provider = %q, want minimax", assistant.Provider)
-	}
-	if assistant.Voice != "Chinese (Mandarin)_Crisp_Girl" {
-		t.Fatalf("voice = %q", assistant.Voice)
-	}
-	if assistant.Speed != 0.98 {
-		t.Fatalf("speed = %v, want 0.98", assistant.Speed)
-	}
-	if assistant.LanguageType != "Chinese" {
-		t.Fatalf("language_type = %q, want Chinese", assistant.LanguageType)
-	}
-	if assistant.MaxTextLen != 120 {
-		t.Fatalf("max_text_len = %d, want 120", assistant.MaxTextLen)
-	}
-
-	reviewer := ResolveTTSConfigForProject(cfg.TTS, "reviewer")
-	if reviewer.Voice != "Chinese (Mandarin)_Gentle_Senior" {
-		t.Fatalf("reviewer voice = %q", reviewer.Voice)
-	}
-	if reviewer.Speed != 1.1 {
-		t.Fatalf("reviewer speed = %v, want inherited 1.1", reviewer.Speed)
-	}
-
-	unknown := ResolveTTSConfigForProject(cfg.TTS, "unknown")
-	if unknown.Voice != "global-id" {
-		t.Fatalf("unknown voice = %q, want global voice_id", unknown.Voice)
-	}
-}
-
-func TestLoadMiniMaxLocalConfig_DefaultDataDir(t *testing.T) {
-	dataDir := t.TempDir()
-	cfgDir := filepath.Join(dataDir, "config")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "minimax.json"), []byte(`{
-  "api_key": "sk-test",
-  "api_host": "https://api.minimaxi.com"
-}`), 0o600); err != nil {
-		t.Fatalf("write minimax config: %v", err)
-	}
-
-	cfg, err := LoadMiniMaxLocalConfig(dataDir, "")
-	if err != nil {
-		t.Fatalf("LoadMiniMaxLocalConfig() error: %v", err)
-	}
-	if cfg.APIKey != "sk-test" {
-		t.Fatalf("api key not loaded")
-	}
-	if cfg.APIHost != "https://api.minimaxi.com" {
-		t.Fatalf("api_host = %q", cfg.APIHost)
-	}
-}
-
-func TestLoadMiniMaxLocalConfig_MissingFileReturnsEmpty(t *testing.T) {
-	cfg, err := LoadMiniMaxLocalConfig(t.TempDir(), "")
-	if err != nil {
-		t.Fatalf("LoadMiniMaxLocalConfig() error: %v", err)
-	}
-	if cfg != (MiniMaxLocalConfig{}) {
-		t.Fatalf("config = %#v, want empty", cfg)
-	}
-}
-
-const multiProjectConfigTOML = `# multi-project config
-[[projects]]
-name = "alpha"
-work_dir = "/tmp/alpha"
-
-[projects.agent]
-type = "codex"
-
-[projects.agent.options]
-provider = "openai"
-
-[[projects.platforms]]
-type = "telegram"
-
-[projects.platforms.options]
-token = "alpha-token"
-
-[[projects]]
-name = "beta"
-work_dir = "/tmp/beta"
-
-[projects.agent]
-type = "claudecode"
-
-[projects.agent.options]
-provider = "anthropic"
-
-[[projects.platforms]]
-type = "feishu"
-
-[projects.platforms.options]
-app_id = "beta-app"
-`
-
-func TestSaveActiveProvider_MultiProject(t *testing.T) {
-	writeTestConfig(t, multiProjectConfigTOML)
-
-	if err := SaveActiveProvider("beta", "openai"); err != nil {
-		t.Fatalf("SaveActiveProvider() error: %v", err)
-	}
-
-	content, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "# multi-project config") {
-		t.Fatalf("expected top comment preserved, got:\n%s", text)
-	}
-
-	cfg := readTestConfig(t)
-	alphaProvider, _ := cfg.Projects[0].Agent.Options["provider"].(string)
-	betaProvider, _ := cfg.Projects[1].Agent.Options["provider"].(string)
-	if alphaProvider != "openai" {
-		t.Fatalf("alpha provider = %q, want openai (untouched)", alphaProvider)
-	}
-	if betaProvider != "openai" {
-		t.Fatalf("beta provider = %q, want openai (updated)", betaProvider)
-	}
-}
-
-const globalProviderRefConfigTOML = `# global provider refs
-[[providers]]
-name = "shared-openai"
-api_key = "sk-shared"
-model = "gpt-4o"
-
-[[projects]]
-name = "demo"
-work_dir = "/tmp/demo"
-
-[projects.agent]
-type = "codex"
-provider_refs = ["shared-openai"]
-
-[[projects.platforms]]
-type = "telegram"
-
-[projects.platforms.options]
-token = "demo-token"
-`
-
-func TestSaveProviderModel_GlobalProviderRef(t *testing.T) {
-	writeTestConfig(t, globalProviderRefConfigTOML)
-
-	if err := SaveProviderModel("demo", "shared-openai", "gpt-5"); err != nil {
-		t.Fatalf("SaveProviderModel() error: %v", err)
-	}
-
-	content, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "# global provider refs") {
-		t.Fatalf("expected comment preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `model = "gpt-5"`) {
-		t.Fatalf("expected model updated in global provider, got:\n%s", text)
-	}
-	if !strings.Contains(text, `api_key = "sk-shared"`) {
-		t.Fatalf("expected api_key preserved, got:\n%s", text)
-	}
-
-	cfg := readTestConfig(t)
-	if cfg.Providers[0].Model != "gpt-5" {
-		t.Fatalf("global provider model = %q, want gpt-5", cfg.Providers[0].Model)
 	}
 }
 
@@ -1082,19 +677,6 @@ func TestDisplayConfig_Save(t *testing.T) {
 	}
 }
 
-func TestTTSConfig_SaveMode(t *testing.T) {
-	writeTestConfig(t, baseConfigTOML)
-
-	if err := SaveTTSMode("always"); err != nil {
-		t.Fatalf("SaveTTSMode() error: %v", err)
-	}
-
-	cfg := readTestConfig(t)
-	if cfg.TTS.TTSMode != "always" {
-		t.Fatalf("TTSMode = %q, want always", cfg.TTS.TTSMode)
-	}
-}
-
 const attachmentSendConfigFixture = `
 attachment_send = "off"
 
@@ -1114,263 +696,8 @@ type = "telegram"
 bot_token = "token_xxx"
 `
 
-func TestSaveFeishuPlatformCredentials_UpdateFirstCandidateAndAllowFrom(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
-	patchConfigPath(t, configPath)
-
-	result, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName:       "alpha",
-		AppID:             "cli_new_app",
-		AppSecret:         "sec_new_secret",
-		OwnerOpenID:       "ou_new_owner",
-		SetAllowFromEmpty: true,
-	})
-	if err != nil {
-		t.Fatalf("SaveFeishuPlatformCredentials returned error: %v", err)
-	}
-
-	if result.ProjectName != "alpha" {
-		t.Fatalf("result.ProjectName = %q, want %q", result.ProjectName, "alpha")
-	}
-	if result.PlatformAbsIndex != 1 {
-		t.Fatalf("result.PlatformAbsIndex = %d, want 1", result.PlatformAbsIndex)
-	}
-	if result.AllowFrom != "ou_new_owner" {
-		t.Fatalf("result.AllowFrom = %q, want %q", result.AllowFrom, "ou_new_owner")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	platform := cfg.Projects[0].Platforms[1]
-	if platform.Type != "feishu" {
-		t.Fatalf("platform.Type = %q, want %q", platform.Type, "feishu")
-	}
-	if got := stringMapValue(platform.Options, "app_id"); got != "cli_new_app" {
-		t.Fatalf("app_id = %q, want %q", got, "cli_new_app")
-	}
-	if got := stringMapValue(platform.Options, "app_secret"); got != "sec_new_secret" {
-		t.Fatalf("app_secret = %q, want %q", got, "sec_new_secret")
-	}
-	if got := stringMapValue(platform.Options, "allow_from"); got != "ou_new_owner" {
-		t.Fatalf("allow_from = %q, want %q", got, "ou_new_owner")
-	}
-}
-
-func TestSaveFeishuPlatformCredentials_SelectByIndexAndOverrideType(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
-	patchConfigPath(t, configPath)
-
-	result, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName:       "alpha",
-		PlatformIndex:     2,
-		PlatformType:      "feishu",
-		AppID:             "cli_second_app",
-		AppSecret:         "sec_second_secret",
-		OwnerOpenID:       "ou_should_not_override",
-		SetAllowFromEmpty: true,
-	})
-	if err != nil {
-		t.Fatalf("SaveFeishuPlatformCredentials returned error: %v", err)
-	}
-
-	if result.PlatformAbsIndex != 2 {
-		t.Fatalf("result.PlatformAbsIndex = %d, want 2", result.PlatformAbsIndex)
-	}
-	if result.PlatformType != "feishu" {
-		t.Fatalf("result.PlatformType = %q, want %q", result.PlatformType, "feishu")
-	}
-	if result.AllowFrom != "ou_existing_owner,ou_should_not_override" {
-		t.Fatalf("result.AllowFrom = %q, want %q", result.AllowFrom, "ou_existing_owner,ou_should_not_override")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	platform := cfg.Projects[0].Platforms[2]
-	if platform.Type != "feishu" {
-		t.Fatalf("platform.Type = %q, want %q", platform.Type, "feishu")
-	}
-	if got := stringMapValue(platform.Options, "app_id"); got != "cli_second_app" {
-		t.Fatalf("app_id = %q, want %q", got, "cli_second_app")
-	}
-	if got := stringMapValue(platform.Options, "app_secret"); got != "sec_second_secret" {
-		t.Fatalf("app_secret = %q, want %q", got, "sec_second_secret")
-	}
-	if got := stringMapValue(platform.Options, "allow_from"); got != "ou_existing_owner,ou_should_not_override" {
-		t.Fatalf("allow_from = %q, want %q", got, "ou_existing_owner,ou_should_not_override")
-	}
-}
-
-func TestSaveFeishuPlatformCredentials_AppendsOwnerToAllowFrom(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
-	patchConfigPath(t, configPath)
-
-	result, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName:       "alpha",
-		PlatformIndex:     2,
-		PlatformType:      "feishu",
-		AppID:             "cli_second_app",
-		AppSecret:         "sec_second_secret",
-		OwnerOpenID:       "ou_new_owner",
-		SetAllowFromEmpty: true,
-	})
-	if err != nil {
-		t.Fatalf("SaveFeishuPlatformCredentials returned error: %v", err)
-	}
-
-	if result.AllowFrom != "ou_existing_owner,ou_new_owner" {
-		t.Fatalf("result.AllowFrom = %q, want %q", result.AllowFrom, "ou_existing_owner,ou_new_owner")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	platform := cfg.Projects[0].Platforms[2]
-	if got := stringMapValue(platform.Options, "allow_from"); got != "ou_existing_owner,ou_new_owner" {
-		t.Fatalf("allow_from = %q, want %q", got, "ou_existing_owner,ou_new_owner")
-	}
-}
-
-func TestSaveFeishuPlatformCredentials_LeavesWildcardAllowFromUnchanged(t *testing.T) {
-	configPath := writeConfigFixture(t, strings.Replace(feishuConfigFixture, `allow_from = "ou_existing_owner"`, `allow_from = "*"`, 1))
-	patchConfigPath(t, configPath)
-
-	result, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName:       "alpha",
-		PlatformIndex:     2,
-		OwnerOpenID:       "ou_new_owner",
-		AppID:             "cli_second_app",
-		AppSecret:         "sec_second_secret",
-		SetAllowFromEmpty: true,
-	})
-	if err != nil {
-		t.Fatalf("SaveFeishuPlatformCredentials returned error: %v", err)
-	}
-
-	if result.AllowFrom != "*" {
-		t.Fatalf("result.AllowFrom = %q, want %q", result.AllowFrom, "*")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	platform := cfg.Projects[0].Platforms[2]
-	if got := stringMapValue(platform.Options, "allow_from"); got != "*" {
-		t.Fatalf("allow_from = %q, want %q", got, "*")
-	}
-}
-
-func TestSaveFeishuPlatformCredentials_ReturnsIndexRangeError(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
-	patchConfigPath(t, configPath)
-
-	_, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName:   "alpha",
-		PlatformIndex: 3,
-		AppID:         "cli_any",
-		AppSecret:     "sec_any",
-	})
-	if err == nil {
-		t.Fatal("expected error for out-of-range platform index, got nil")
-	}
-	if !strings.Contains(err.Error(), "out of range") {
-		t.Fatalf("error = %q, want contains %q", err.Error(), "out of range")
-	}
-}
-
-func TestEnsureProjectWithFeishuPlatform_CreatesMissingProject(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
-	patchConfigPath(t, configPath)
-
-	result, err := EnsureProjectWithFeishuPlatform(EnsureProjectWithFeishuOptions{
-		ProjectName:  "gamma",
-		PlatformType: "lark",
-		WorkDir:      "/tmp/gamma",
-	})
-	if err != nil {
-		t.Fatalf("EnsureProjectWithFeishuPlatform returned error: %v", err)
-	}
-	if !result.Created {
-		t.Fatal("result.Created = false, want true")
-	}
-	if result.AddedPlatform {
-		t.Fatal("result.AddedPlatform = true, want false")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	if len(cfg.Projects) != 2 {
-		t.Fatalf("len(cfg.Projects) = %d, want 2", len(cfg.Projects))
-	}
-	proj := cfg.Projects[1]
-	if proj.Name != "gamma" {
-		t.Fatalf("proj.Name = %q, want %q", proj.Name, "gamma")
-	}
-	if len(proj.Platforms) != 1 {
-		t.Fatalf("len(proj.Platforms) = %d, want 1", len(proj.Platforms))
-	}
-	if proj.Platforms[0].Type != "lark" {
-		t.Fatalf("platform type = %q, want %q", proj.Platforms[0].Type, "lark")
-	}
-	if got := stringMapValue(proj.Agent.Options, "work_dir"); got != "/tmp/gamma" {
-		t.Fatalf("work_dir = %q, want explicit override %q", got, "/tmp/gamma")
-	}
-}
-
-func TestEnsureProjectWithFeishuPlatform_AddsPlatformWhenProjectExistsWithoutFeishu(t *testing.T) {
-	configPath := writeConfigFixture(t, projectWithoutFeishuFixture)
-	patchConfigPath(t, configPath)
-
-	result, err := EnsureProjectWithFeishuPlatform(EnsureProjectWithFeishuOptions{
-		ProjectName:  "beta",
-		PlatformType: "feishu",
-	})
-	if err != nil {
-		t.Fatalf("EnsureProjectWithFeishuPlatform returned error: %v", err)
-	}
-	if result.Created {
-		t.Fatal("result.Created = true, want false")
-	}
-	if !result.AddedPlatform {
-		t.Fatal("result.AddedPlatform = false, want true")
-	}
-
-	cfg := readConfigFixture(t, configPath)
-	proj := cfg.Projects[0]
-	if len(proj.Platforms) != 2 {
-		t.Fatalf("len(proj.Platforms) = %d, want 2", len(proj.Platforms))
-	}
-	if proj.Platforms[1].Type != "feishu" {
-		t.Fatalf("platform type = %q, want %q", proj.Platforms[1].Type, "feishu")
-	}
-}
-
-func TestSaveFeishuPlatformCredentials_PreservesCommentsAndUnknownFields(t *testing.T) {
-	configPath := writeConfigFixture(t, preserveFormatFixture)
-	patchConfigPath(t, configPath)
-
-	_, err := SaveFeishuPlatformCredentials(FeishuCredentialUpdateOptions{
-		ProjectName: "alpha",
-		AppID:       "cli_new_app",
-		AppSecret:   "sec_new_secret",
-	})
-	if err != nil {
-		t.Fatalf("SaveFeishuPlatformCredentials returned error: %v", err)
-	}
-
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read config fixture: %v", err)
-	}
-	text := string(content)
-	if !strings.Contains(text, "# top comment should stay") {
-		t.Fatalf("expected top comment to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `custom_top = "keep_me"`) {
-		t.Fatalf("expected unknown top-level field to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, `custom_option = "still_here"`) {
-		t.Fatalf("expected unknown options field to be preserved, got:\n%s", text)
-	}
-	if !strings.Contains(text, "keep inline comment") {
-		t.Fatalf("expected inline comment to be preserved, got:\n%s", text)
-	}
-}
-
 func TestLoad_DefaultsAttachmentSendToOn(t *testing.T) {
-	configPath := writeConfigFixture(t, projectWithoutFeishuFixture)
+	configPath := writeConfigFixture(t, telegramOnlyConfigFixture)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -1382,7 +709,7 @@ func TestLoad_DefaultsAttachmentSendToOn(t *testing.T) {
 }
 
 func TestLoad_DefaultsAutoCompressDisabled(t *testing.T) {
-	configPath := writeConfigFixture(t, projectWithoutFeishuFixture)
+	configPath := writeConfigFixture(t, telegramOnlyConfigFixture)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -1646,7 +973,7 @@ type = "telegram"
 token = "test-token"
 `
 
-const providerConfigTOML = `
+const agentConfigTOML = `
 [[projects]]
 name = "demo"
 
@@ -1655,15 +982,7 @@ type = "claudecode"
 
 [projects.agent.options]
 mode = "default"
-provider = "primary"
-
-[[projects.agent.providers]]
-name = "primary"
-api_key = "sk-primary"
-
-[[projects.agent.providers]]
-name = "backup"
-api_key = "sk-backup"
+reasoning_effort = "high"
 
 [[projects.platforms]]
 type = "telegram"
@@ -1672,7 +991,7 @@ type = "telegram"
 token = "test-token"
 `
 
-const feishuConfigFixture = `
+const multiPlatformConfigFixture = `
 [[projects]]
 name = "alpha"
 
@@ -1689,22 +1008,20 @@ type = "telegram"
 bot_token = "token_xxx"
 
 [[projects.platforms]]
-type = "feishu"
+type = "weixin"
 
 [projects.platforms.options]
-app_id = "old_feishu_app"
-app_secret = "old_feishu_secret"
+token = "old_weixin_token"
 
 [[projects.platforms]]
-type = "lark"
+type = "qq"
 
 [projects.platforms.options]
-app_id = "old_lark_app"
-app_secret = "old_lark_secret"
+ws_url = "ws://127.0.0.1:3001"
 allow_from = "ou_existing_owner"
 `
 
-const projectWithoutFeishuFixture = `
+const telegramOnlyConfigFixture = `
 [[projects]]
 name = "beta"
 
@@ -1879,7 +1196,7 @@ type = "codex"
 work_dir = "/tmp/alpha"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 
 [projects.platforms.options]
 app_id = "old_app" # keep inline comment
@@ -2081,30 +1398,25 @@ func TestPickAgentTemplateForNewProject(t *testing.T) {
 		Agent: AgentConfig{
 			Type:    "claudecode",
 			Options: map[string]any{"mode": "yolo"},
-			Providers: []ProviderConfig{{
-				Name:   "openai",
-				APIKey: "sk-test",
-				Model:  "gpt-4",
-			}},
 		},
 		Platforms: []PlatformConfig{{Type: "telegram", Options: map[string]any{"token": "x"}}},
 	}
 
 	t.Run("clone from existing project", func(t *testing.T) {
 		cfg := &Config{Projects: []ProjectConfig{baseProj}}
-		opts := EnsureProjectWithFeishuOptions{CloneFromProject: "base"}
+		opts := newProjectAgentTemplate{CloneFromProject: "base"}
 		got := pickAgentTemplateForNewProject(cfg, opts)
 		if got.Type != "claudecode" {
 			t.Errorf("Type = %q, want claudecode", got.Type)
 		}
-		if len(got.Providers) != 1 || got.Providers[0].APIKey != "sk-test" {
-			t.Errorf("Providers not cloned correctly")
+		if got.Options["mode"] != "yolo" {
+			t.Errorf("Options not cloned correctly")
 		}
 	})
 
 	t.Run("no clone but has projects", func(t *testing.T) {
 		cfg := &Config{Projects: []ProjectConfig{baseProj}}
-		opts := EnsureProjectWithFeishuOptions{}
+		opts := newProjectAgentTemplate{}
 		got := pickAgentTemplateForNewProject(cfg, opts)
 		if got.Type != "claudecode" {
 			t.Errorf("Type = %q, want claudecode", got.Type)
@@ -2113,7 +1425,7 @@ func TestPickAgentTemplateForNewProject(t *testing.T) {
 
 	t.Run("no projects uses default codex", func(t *testing.T) {
 		cfg := &Config{Projects: []ProjectConfig{}}
-		opts := EnsureProjectWithFeishuOptions{}
+		opts := newProjectAgentTemplate{}
 		got := pickAgentTemplateForNewProject(cfg, opts)
 		if got.Type != "codex" {
 			t.Errorf("Type = %q, want codex", got.Type)
@@ -2125,7 +1437,7 @@ func TestPickAgentTemplateForNewProject(t *testing.T) {
 
 	t.Run("no projects with explicit agent type", func(t *testing.T) {
 		cfg := &Config{Projects: []ProjectConfig{}}
-		opts := EnsureProjectWithFeishuOptions{AgentType: "claudecode"}
+		opts := newProjectAgentTemplate{AgentType: "claudecode"}
 		got := pickAgentTemplateForNewProject(cfg, opts)
 		if got.Type != "claudecode" {
 			t.Errorf("Type = %q, want claudecode", got.Type)
@@ -2134,7 +1446,7 @@ func TestPickAgentTemplateForNewProject(t *testing.T) {
 
 	t.Run("explicit agent type overrides clone from first project", func(t *testing.T) {
 		cfg := &Config{Projects: []ProjectConfig{baseProj}}
-		opts := EnsureProjectWithFeishuOptions{AgentType: "codex"}
+		opts := newProjectAgentTemplate{AgentType: "codex"}
 		got := pickAgentTemplateForNewProject(cfg, opts)
 		if got.Type != "codex" {
 			t.Errorf("Type = %q, want codex (explicit AgentType should take priority over cloning first project)", got.Type)
@@ -2145,64 +1457,26 @@ func TestPickAgentTemplateForNewProject(t *testing.T) {
 // --- cloneAgentConfig tests ---
 
 func TestCloneAgentConfig(t *testing.T) {
-	t.Run("without providers", func(t *testing.T) {
-		in := AgentConfig{
-			Type:    "codex",
-			Options: map[string]any{"mode": "default"},
-		}
-		got := cloneAgentConfig(in)
-		if got.Type != "codex" {
-			t.Errorf("Type = %q, want codex", got.Type)
-		}
-		if got.Options["mode"] != "default" {
-			t.Errorf("Options not cloned")
-		}
-		if len(got.Providers) != 0 {
-			t.Errorf("Providers length = %d, want 0", len(got.Providers))
-		}
-	})
-
-	t.Run("with providers", func(t *testing.T) {
-		in := AgentConfig{
-			Type:    "claudecode",
-			Options: map[string]any{"work_dir": "/tmp/test"},
-			Providers: []ProviderConfig{
-				{
-					Name:     "openai",
-					APIKey:   "sk-test",
-					BaseURL:  "https://api.openai.com",
-					Model:    "gpt-4",
-					Thinking: "on",
-					Env:      map[string]string{"DEBUG": "1"},
-				},
-			},
-		}
-		got := cloneAgentConfig(in)
-		if len(got.Providers) != 1 {
-			t.Fatalf("Providers length = %d, want 1", len(got.Providers))
-		}
-		p := got.Providers[0]
-		if p.Name != "openai" || p.APIKey != "sk-test" || p.BaseURL != "https://api.openai.com" || p.Model != "gpt-4" {
-			t.Errorf("Provider fields not cloned correctly: %+v", p)
-		}
-		if p.Env["DEBUG"] != "1" {
-			t.Errorf("Provider Env not cloned correctly")
-		}
-		// Verify deep copy of Options
-		got.Options["mode"] = "changed"
-		if in.Options["mode"] == "changed" {
-			t.Error("Options is same reference, not a deep copy")
-		}
-		// Verify deep copy of Provider Env
-		delete(got.Providers[0].Env, "DEBUG")
-		if in.Providers[0].Env["DEBUG"] == "" {
-			t.Error("Provider Env is same reference, not a deep copy")
-		}
-	})
+	in := AgentConfig{
+		Type:    "codex",
+		Options: map[string]any{"mode": "default"},
+	}
+	got := cloneAgentConfig(in)
+	if got.Type != "codex" {
+		t.Errorf("Type = %q, want codex", got.Type)
+	}
+	if got.Options["mode"] != "default" {
+		t.Errorf("Options not cloned")
+	}
+	// Verify deep copy of Options
+	got.Options["mode"] = "changed"
+	if in.Options["mode"] == "changed" {
+		t.Error("Options is same reference, not a deep copy")
+	}
 }
 
 func TestEnsureProjectWithWeixinPlatform_CreatesMissingProject(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
+	configPath := writeConfigFixture(t, multiPlatformConfigFixture)
 	patchConfigPath(t, configPath)
 
 	result, err := EnsureProjectWithWeixinPlatform(EnsureProjectWithWeixinOptions{
@@ -2236,7 +1510,7 @@ func TestEnsureProjectWithWeixinPlatform_CreatesMissingProject(t *testing.T) {
 }
 
 func TestEnsureProjectWithWeixinPlatform_AddsPlatformWhenMissing(t *testing.T) {
-	configPath := writeConfigFixture(t, projectWithoutFeishuFixture)
+	configPath := writeConfigFixture(t, telegramOnlyConfigFixture)
 	patchConfigPath(t, configPath)
 
 	result, err := EnsureProjectWithWeixinPlatform(EnsureProjectWithWeixinOptions{
@@ -2335,7 +1609,7 @@ func TestSaveWeixinPlatformCredentials_LeavesWildcardAllowFromUnchanged(t *testi
 }
 
 func TestSaveProjectSettings_ExtraFields(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
+	configPath := writeConfigFixture(t, multiPlatformConfigFixture)
 	patchConfigPath(t, configPath)
 
 	show := true
@@ -2347,7 +1621,7 @@ func TestSaveProjectSettings_ExtraFields(t *testing.T) {
 		Mode:                 &mode,
 		ShowContextIndicator: &show,
 		ShowWorkdirIndicator: &hideWorkdir,
-		PlatformAllowFrom:    map[string]string{"telegram": "u1", "Feishu": "u2"},
+		PlatformAllowFrom:    map[string]string{"telegram": "u1", "Weixin": "u2"},
 	})
 	if err != nil {
 		t.Fatalf("SaveProjectSettings: %v", err)
@@ -2371,12 +1645,12 @@ func TestSaveProjectSettings_ExtraFields(t *testing.T) {
 		t.Fatalf("telegram allow_from = %q, want u1", stringMapValue(proj.Platforms[0].Options, "allow_from"))
 	}
 	if stringMapValue(proj.Platforms[1].Options, "allow_from") != "u2" {
-		t.Fatalf("feishu allow_from = %q, want u2", stringMapValue(proj.Platforms[1].Options, "allow_from"))
+		t.Fatalf("weixin allow_from = %q, want u2", stringMapValue(proj.Platforms[1].Options, "allow_from"))
 	}
 }
 
 func TestGetProjectConfigDetails(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
+	configPath := writeConfigFixture(t, multiPlatformConfigFixture)
 	patchConfigPath(t, configPath)
 
 	details := GetProjectConfigDetails("alpha")
@@ -2393,7 +1667,7 @@ func TestGetProjectConfigDetails(t *testing.T) {
 }
 
 func TestAddPlatformToProject_NewProjectWithAgentTypeAndWorkDir(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
+	configPath := writeConfigFixture(t, multiPlatformConfigFixture)
 	patchConfigPath(t, configPath)
 
 	err := AddPlatformToProject("sigma", PlatformConfig{Type: "telegram", Options: map[string]any{"token": "x"}}, "/sigma", "claudecode")
@@ -2420,7 +1694,7 @@ func TestAddPlatformToProject_NewProjectWithAgentTypeAndWorkDir(t *testing.T) {
 }
 
 func TestAddPlatformToProject_NewProjectClonesAgentWhenAgentTypeEmpty(t *testing.T) {
-	configPath := writeConfigFixture(t, feishuConfigFixture)
+	configPath := writeConfigFixture(t, multiPlatformConfigFixture)
 	patchConfigPath(t, configPath)
 
 	err := AddPlatformToProject("tau", PlatformConfig{Type: "telegram", Options: map[string]any{"token": "x"}}, "", "")
@@ -2529,522 +1803,4 @@ func TestFormatConfigFile(t *testing.T) {
 			t.Error("expected error for invalid TOML")
 		}
 	})
-}
-
-func TestResolveProviderRefs(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "global-a", APIKey: "key-a", BaseURL: "https://a.com"},
-			{Name: "global-b", APIKey: "key-b", BaseURL: "https://b.com"},
-		},
-		Projects: []ProjectConfig{
-			{
-				Name: "proj-with-refs",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"global-a", "global-b"},
-				},
-			},
-			{
-				Name: "proj-inline-only",
-				Agent: AgentConfig{
-					Type: "codex",
-					Providers: []ProviderConfig{
-						{Name: "inline-p", APIKey: "inline-key"},
-					},
-				},
-			},
-			{
-				Name: "proj-mixed",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"global-a", "global-b"},
-					Providers: []ProviderConfig{
-						{Name: "global-a", APIKey: "override-key", BaseURL: "https://override.com"},
-					},
-				},
-			},
-		},
-	}
-
-	cfg.ResolveProviderRefs()
-
-	// proj-with-refs: should have both global providers
-	p0 := cfg.Projects[0].Agent.Providers
-	if len(p0) != 2 {
-		t.Fatalf("proj-with-refs: expected 2 providers, got %d", len(p0))
-	}
-	if p0[0].Name != "global-a" || p0[0].APIKey != "key-a" {
-		t.Errorf("proj-with-refs[0]: expected global-a/key-a, got %s/%s", p0[0].Name, p0[0].APIKey)
-	}
-	if p0[1].Name != "global-b" || p0[1].APIKey != "key-b" {
-		t.Errorf("proj-with-refs[1]: expected global-b/key-b, got %s/%s", p0[1].Name, p0[1].APIKey)
-	}
-
-	// proj-inline-only: should remain unchanged
-	p1 := cfg.Projects[1].Agent.Providers
-	if len(p1) != 1 || p1[0].Name != "inline-p" {
-		t.Errorf("proj-inline-only: expected 1 inline provider, got %d", len(p1))
-	}
-
-	// proj-mixed: inline override takes precedence for global-a, global-b from ref
-	p2 := cfg.Projects[2].Agent.Providers
-	if len(p2) != 2 {
-		t.Fatalf("proj-mixed: expected 2 providers, got %d", len(p2))
-	}
-	// global-b is resolved from ref (since no inline override)
-	if p2[0].Name != "global-b" || p2[0].APIKey != "key-b" {
-		t.Errorf("proj-mixed[0]: expected global-b from ref, got %s/%s", p2[0].Name, p2[0].APIKey)
-	}
-	// global-a is from inline override
-	if p2[1].Name != "global-a" || p2[1].APIKey != "override-key" {
-		t.Errorf("proj-mixed[1]: expected global-a override, got %s/%s", p2[1].Name, p2[1].APIKey)
-	}
-}
-
-func TestResolveProviderRefs_MissingRef(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "exists", APIKey: "key"},
-		},
-		Projects: []ProjectConfig{
-			{
-				Name: "proj",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"exists", "nonexistent"},
-				},
-			},
-		},
-	}
-
-	cfg.ResolveProviderRefs()
-
-	providers := cfg.Projects[0].Agent.Providers
-	if len(providers) != 1 || providers[0].Name != "exists" {
-		t.Errorf("expected 1 resolved provider 'exists', got %d: %+v", len(providers), providers)
-	}
-}
-
-func TestResolveProviderRefs_AgentTypeFiltering(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "claude-only", APIKey: "key-c", AgentTypes: []string{"claudecode"}},
-			{Name: "codex-only", APIKey: "key-x", AgentTypes: []string{"codex"}},
-			{Name: "universal", APIKey: "key-u"}, // no agent_types = works for all
-		},
-		Projects: []ProjectConfig{
-			{
-				Name: "proj-claude",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"claude-only", "codex-only", "universal"},
-				},
-			},
-			{
-				Name: "proj-codex",
-				Agent: AgentConfig{
-					Type:         "codex",
-					ProviderRefs: []string{"claude-only", "codex-only", "universal"},
-				},
-			},
-		},
-	}
-
-	cfg.ResolveProviderRefs()
-
-	// claudecode project: gets claude-only + universal, skips codex-only
-	p0 := cfg.Projects[0].Agent.Providers
-	if len(p0) != 2 {
-		t.Fatalf("proj-claude: expected 2 providers, got %d: %+v", len(p0), p0)
-	}
-	if p0[0].Name != "claude-only" {
-		t.Errorf("proj-claude[0]: expected claude-only, got %s", p0[0].Name)
-	}
-	if p0[1].Name != "universal" {
-		t.Errorf("proj-claude[1]: expected universal, got %s", p0[1].Name)
-	}
-
-	// codex project: gets codex-only + universal, skips claude-only
-	p1 := cfg.Projects[1].Agent.Providers
-	if len(p1) != 2 {
-		t.Fatalf("proj-codex: expected 2 providers, got %d: %+v", len(p1), p1)
-	}
-	if p1[0].Name != "codex-only" {
-		t.Errorf("proj-codex[0]: expected codex-only, got %s", p1[0].Name)
-	}
-	if p1[1].Name != "universal" {
-		t.Errorf("proj-codex[1]: expected universal, got %s", p1[1].Name)
-	}
-}
-
-func TestResolveProviderRefs_NoGlobalProviders(t *testing.T) {
-	cfg := &Config{
-		Projects: []ProjectConfig{
-			{
-				Name: "proj",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"foo"},
-					Providers: []ProviderConfig{
-						{Name: "bar", APIKey: "key"},
-					},
-				},
-			},
-		},
-	}
-
-	cfg.ResolveProviderRefs()
-
-	providers := cfg.Projects[0].Agent.Providers
-	if len(providers) != 1 || providers[0].Name != "bar" {
-		t.Errorf("expected only inline provider 'bar', got %+v", providers)
-	}
-}
-
-func TestResolveProviderRefs_Basic(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "global1", APIKey: "key1", BaseURL: "https://example.com", Model: "model-a"},
-		},
-		Projects: []ProjectConfig{{
-			Name: "proj",
-			Agent: AgentConfig{
-				Type:         "claudecode",
-				ProviderRefs: []string{"global1"},
-			},
-		}},
-	}
-	cfg.ResolveProviderRefs()
-
-	ps := cfg.Projects[0].Agent.Providers
-	if len(ps) != 1 || ps[0].Name != "global1" || ps[0].BaseURL != "https://example.com" {
-		t.Fatalf("expected resolved global1, got %+v", ps)
-	}
-}
-
-func TestResolveProviderRefs_AgentTypesFilter(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "claude-only", AgentTypes: []string{"claudecode"}},
-			{Name: "codex-only", AgentTypes: []string{"codex"}},
-			{Name: "universal"},
-		},
-		Projects: []ProjectConfig{{
-			Name: "codex-proj",
-			Agent: AgentConfig{
-				Type:         "codex",
-				ProviderRefs: []string{"claude-only", "codex-only", "universal"},
-			},
-		}},
-	}
-	cfg.ResolveProviderRefs()
-
-	ps := cfg.Projects[0].Agent.Providers
-	names := make([]string, len(ps))
-	for i, p := range ps {
-		names[i] = p.Name
-	}
-	if len(ps) != 2 {
-		t.Fatalf("expected 2 providers (codex-only + universal), got %v", names)
-	}
-	if names[0] != "codex-only" || names[1] != "universal" {
-		t.Fatalf("unexpected providers: %v", names)
-	}
-}
-
-func TestResolveProviderRefs_EndpointsOverride(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{{
-			Name:    "multi",
-			BaseURL: "https://provider.com/api",
-			Model:   "claude-sonnet-4",
-			Endpoints: map[string]string{
-				"codex": "https://provider.com/api/v1",
-			},
-			AgentModels: map[string]string{
-				"codex": "openai/gpt-5.3-codex",
-			},
-		}},
-		Projects: []ProjectConfig{
-			{
-				Name: "claude-proj",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"multi"},
-				},
-			},
-			{
-				Name: "codex-proj",
-				Agent: AgentConfig{
-					Type:         "codex",
-					ProviderRefs: []string{"multi"},
-				},
-			},
-		},
-	}
-	cfg.ResolveProviderRefs()
-
-	// claudecode project: should keep original base_url and model
-	cp := cfg.Projects[0].Agent.Providers
-	if len(cp) != 1 {
-		t.Fatalf("claude-proj: expected 1 provider, got %d", len(cp))
-	}
-	if cp[0].BaseURL != "https://provider.com/api" {
-		t.Errorf("claude-proj: base_url = %q, want original", cp[0].BaseURL)
-	}
-	if cp[0].Model != "claude-sonnet-4" {
-		t.Errorf("claude-proj: model = %q, want original", cp[0].Model)
-	}
-
-	// codex project: should have overridden base_url and model
-	xp := cfg.Projects[1].Agent.Providers
-	if len(xp) != 1 {
-		t.Fatalf("codex-proj: expected 1 provider, got %d", len(xp))
-	}
-	if xp[0].BaseURL != "https://provider.com/api/v1" {
-		t.Errorf("codex-proj: base_url = %q, want codex endpoint", xp[0].BaseURL)
-	}
-	if xp[0].Model != "openai/gpt-5.3-codex" {
-		t.Errorf("codex-proj: model = %q, want codex model", xp[0].Model)
-	}
-}
-
-func TestResolveProviderRefs_SplitProviderPattern(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{
-				Name:       "ssy",
-				APIKey:     "key-xxx",
-				BaseURL:    "https://router.example.com/api",
-				Model:      "claude-sonnet-4-6",
-				AgentTypes: []string{"claudecode"},
-				Models: []ProviderModelConfig{
-					{Model: "claude-sonnet-4-6"},
-					{Model: "claude-opus-4"},
-				},
-			},
-			{
-				Name:       "ssy-codex",
-				APIKey:     "key-xxx",
-				BaseURL:    "https://router.example.com/api/v1",
-				Model:      "openai/gpt-5.3-codex",
-				AgentTypes: []string{"codex"},
-				Models: []ProviderModelConfig{
-					{Model: "openai/gpt-5.3-codex"},
-					{Model: "openai/gpt-5.4"},
-				},
-				Codex: &CodexProviderConfig{WireAPI: "responses"},
-			},
-		},
-		Projects: []ProjectConfig{
-			{
-				Name: "my-claude",
-				Agent: AgentConfig{
-					Type:         "claudecode",
-					ProviderRefs: []string{"ssy", "ssy-codex"},
-				},
-			},
-			{
-				Name: "my-codex",
-				Agent: AgentConfig{
-					Type:         "codex",
-					ProviderRefs: []string{"ssy", "ssy-codex"},
-				},
-			},
-		},
-	}
-	cfg.ResolveProviderRefs()
-
-	// claudecode project should only get "ssy" (not ssy-codex)
-	cp := cfg.Projects[0].Agent.Providers
-	if len(cp) != 1 || cp[0].Name != "ssy" {
-		names := make([]string, len(cp))
-		for i, p := range cp {
-			names[i] = p.Name
-		}
-		t.Fatalf("claude project: expected [ssy], got %v", names)
-	}
-	if len(cp[0].Models) != 2 || cp[0].Models[0].Model != "claude-sonnet-4-6" {
-		t.Errorf("claude project: unexpected models: %+v", cp[0].Models)
-	}
-
-	// codex project should only get "ssy-codex" (not ssy)
-	xp := cfg.Projects[1].Agent.Providers
-	if len(xp) != 1 || xp[0].Name != "ssy-codex" {
-		names := make([]string, len(xp))
-		for i, p := range xp {
-			names[i] = p.Name
-		}
-		t.Fatalf("codex project: expected [ssy-codex], got %v", names)
-	}
-	if xp[0].BaseURL != "https://router.example.com/api/v1" {
-		t.Errorf("codex project: base_url = %q", xp[0].BaseURL)
-	}
-	if xp[0].Model != "openai/gpt-5.3-codex" {
-		t.Errorf("codex project: model = %q", xp[0].Model)
-	}
-	if xp[0].Codex == nil || xp[0].Codex.WireAPI != "responses" {
-		t.Errorf("codex project: codex config missing or wrong: %+v", xp[0].Codex)
-	}
-}
-
-func TestResolveProviderRefs_InlineOverridesGlobal(t *testing.T) {
-	cfg := &Config{
-		Providers: []ProviderConfig{
-			{Name: "global1", BaseURL: "https://global.com", Model: "global-model"},
-		},
-		Projects: []ProjectConfig{{
-			Name: "proj",
-			Agent: AgentConfig{
-				Type:         "claudecode",
-				ProviderRefs: []string{"global1"},
-				Providers: []ProviderConfig{
-					{Name: "global1", BaseURL: "https://override.com", Model: "override-model"},
-				},
-			},
-		}},
-	}
-	cfg.ResolveProviderRefs()
-
-	ps := cfg.Projects[0].Agent.Providers
-	if len(ps) != 1 {
-		t.Fatalf("expected 1 provider (inline override), got %d", len(ps))
-	}
-	if ps[0].BaseURL != "https://override.com" {
-		t.Errorf("inline override not applied: base_url = %q", ps[0].BaseURL)
-	}
-}
-
-func TestResolveProviderRefs_TOMLParsing(t *testing.T) {
-	input := `
-[[providers]]
-  name = "ssy"
-  api_key = "key123"
-  base_url = "https://router.example.com/api"
-  model = "claude-sonnet-4-6"
-  agent_types = ["claudecode"]
-
-  [[providers.models]]
-    model = "claude-sonnet-4-6"
-
-[[providers]]
-  name = "ssy-codex"
-  api_key = "key123"
-  base_url = "https://router.example.com/api/v1"
-  model = "openai/gpt-5.3-codex"
-  agent_types = ["codex"]
-
-  [providers.endpoints]
-    codex = "https://router.example.com/api/v1"
-
-  [providers.agent_models]
-    codex = "openai/gpt-5.3-codex"
-
-  [[providers.models]]
-    model = "openai/gpt-5.3-codex"
-
-  [providers.codex]
-    wire_api = "responses"
-
-[[projects]]
-  name = "test-codex"
-
-  [projects.agent]
-    type = "codex"
-    provider_refs = ["ssy", "ssy-codex"]
-
-  [[projects.platforms]]
-    type = "feishu"
-    [projects.platforms.options]
-      app_id = "test"
-      app_secret = "test"
-`
-	var cfg Config
-	if _, err := toml.Decode(input, &cfg); err != nil {
-		t.Fatalf("TOML decode: %v", err)
-	}
-
-	if len(cfg.Providers) != 2 {
-		t.Fatalf("expected 2 global providers, got %d", len(cfg.Providers))
-	}
-
-	codexProv := cfg.Providers[1]
-	if codexProv.Codex == nil {
-		t.Fatal("ssy-codex: codex config not parsed")
-	}
-	if codexProv.Codex.WireAPI != "responses" {
-		t.Errorf("ssy-codex: wire_api = %q, want responses", codexProv.Codex.WireAPI)
-	}
-	if codexProv.Endpoints["codex"] != "https://router.example.com/api/v1" {
-		t.Errorf("ssy-codex: endpoints not parsed: %+v", codexProv.Endpoints)
-	}
-
-	cfg.ResolveProviderRefs()
-
-	ps := cfg.Projects[0].Agent.Providers
-	if len(ps) != 1 || ps[0].Name != "ssy-codex" {
-		names := make([]string, len(ps))
-		for i, p := range ps {
-			names[i] = p.Name
-		}
-		t.Fatalf("expected [ssy-codex], got %v", names)
-	}
-}
-
-func TestRemoveGlobalProvider_CleansUpProviderRefs(t *testing.T) {
-	input := `
-[[providers]]
-  name = "prov-a"
-  api_key = "key-a"
-
-[[providers]]
-  name = "prov-b"
-  api_key = "key-b"
-
-[[projects]]
-  name = "proj1"
-  [projects.agent]
-    type = "claudecode"
-    provider_refs = ["prov-a", "prov-b"]
-  [[projects.platforms]]
-    type = "feishu"
-    [projects.platforms.options]
-      app_id = "x"
-      app_secret = "y"
-
-[[projects]]
-  name = "proj2"
-  [projects.agent]
-    type = "codex"
-    provider_refs = ["prov-a"]
-  [[projects.platforms]]
-    type = "telegram"
-    [projects.platforms.options]
-      token = "t"
-`
-	writeTestConfig(t, input)
-
-	if err := RemoveGlobalProvider("prov-a"); err != nil {
-		t.Fatalf("RemoveGlobalProvider: %v", err)
-	}
-
-	cfg, err := loadLocked()
-	if err != nil {
-		t.Fatalf("loadLocked: %v", err)
-	}
-
-	if len(cfg.Providers) != 1 || cfg.Providers[0].Name != "prov-b" {
-		t.Fatalf("expected only prov-b remaining, got %v", cfg.Providers)
-	}
-
-	refs1 := cfg.Projects[0].Agent.ProviderRefs
-	if len(refs1) != 1 || refs1[0] != "prov-b" {
-		t.Errorf("proj1 provider_refs: want [prov-b], got %v", refs1)
-	}
-
-	refs2 := cfg.Projects[1].Agent.ProviderRefs
-	if len(refs2) != 0 {
-		t.Errorf("proj2 provider_refs: want [], got %v", refs2)
-	}
 }

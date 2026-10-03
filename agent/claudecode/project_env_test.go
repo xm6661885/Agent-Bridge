@@ -1,9 +1,8 @@
 package claudecode
 
 import (
+	"strings"
 	"testing"
-
-	"agent-bridge/core"
 )
 
 func TestNew_ParsesProjectEnvFromOpts(t *testing.T) {
@@ -93,43 +92,14 @@ func TestNew_NoEnvOpts(t *testing.T) {
 	}
 }
 
-func TestNew_ProjectEnvOverridesProviderEnv(t *testing.T) {
-	opts := map[string]any{
-		"work_dir":    t.TempDir(),
-		"run_as_user": "test-user",
-		"env": map[string]string{
-			"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/v1",
-			"ANTHROPIC_AUTH_TOKEN": "sk-deepseek-test",
-			"ANTHROPIC_MODEL":      "deepseek-chat",
-		},
+func envSliceToMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		out[key] = value
 	}
-
-	a, err := New(opts)
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
-	}
-
-	agent := a.(*Agent)
-	// Set providers to simulate a provider being configured
-	agent.providers = []core.ProviderConfig{
-		{
-			Name:    "deepseek",
-			BaseURL: "https://api.deepseek.com/v1",
-			APIKey:  "sk-deepseek-test",
-			Model:   "deepseek-chat",
-		},
-	}
-	agent.activeIdx = 0
-
-	// runtimeEnvLocked merges configEnv + providerEnv + sessionEnv
-	// configEnv (from opts["env"]) should be present
-	env := agent.runtimeEnvLocked()
-	envMap := envSliceToMap(env)
-
-	if got := envMap["ANTHROPIC_BASE_URL"]; got != "https://api.deepseek.com/v1" {
-		t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", got, "https://api.deepseek.com/v1")
-	}
-	if got := envMap["ANTHROPIC_MODEL"]; got != "deepseek-chat" {
-		t.Errorf("ANTHROPIC_MODEL = %q, want %q", got, "deepseek-chat")
-	}
+	return out
 }

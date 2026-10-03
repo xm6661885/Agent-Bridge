@@ -15,9 +15,7 @@ PLATFORMS := \
   linux/amd64 \
   linux/arm64 \
   darwin/amd64 \
-  darwin/arm64 \
-  windows/amd64 \
-  windows/arm64
+  darwin/arm64
 
 # ---------------------------------------------------------------------------
 # Selective compilation via build tags.
@@ -25,15 +23,15 @@ PLATFORMS := \
 # By default all agents and platforms are included. To build with only
 # specific ones, set AGENTS and/or PLATFORMS_INCLUDE:
 #
-#   make build AGENTS=claudecode PLATFORMS_INCLUDE=feishu,telegram
+#   make build AGENTS=claudecode PLATFORMS_INCLUDE=weixin,telegram
 #
 # You can also exclude specific ones:
 #
-#   make build EXCLUDE=qq,qqbot
+#   make build EXCLUDE=qq
 # ---------------------------------------------------------------------------
 
 ALL_AGENTS    := claudecode codex
-ALL_PLATFORMS := feishu weixin telegram qq qqbot
+ALL_PLATFORMS := weixin telegram qq
 
 COMMA := ,
 
@@ -132,7 +130,6 @@ test-release-local:
 	go test ./tests/release_local/...
 	go test ./config
 	go test ./core -run 'TestEngineSendToSessionWithAttachments|TestProcessInteractiveEvents_SuppressesDuplicateSideChannelText|TestCmdList_AllSessionsVisibleAfterRepeatedNew|TestCmdList_SessionVisibleDuringAgentProcessing|TestEngine_Alias|TestEngine_BannedWords|TestEngine_DisabledCommands'
-	go test ./platform/feishu -run 'TestUserIDFromEventFallsBackToUserID|TestResolveUserNameSkipsInvalidLookupID|TestNew_CanDisableInteractiveCards'
 
 # Legacy: runs unit tests only
 test:
@@ -146,8 +143,7 @@ release-all: web clean
 	@$(foreach platform,$(PLATFORMS), \
 		$(eval GOOS   := $(word 1,$(subst /, ,$(platform)))) \
 		$(eval GOARCH := $(word 2,$(subst /, ,$(platform)))) \
-		$(eval EXT    := $(if $(filter windows,$(GOOS)),.exe,)) \
-		$(eval OUT    := $(DIST)/$(APP)-$(VERSION)-$(GOOS)-$(GOARCH)$(EXT)) \
+		$(eval OUT    := $(DIST)/$(APP)-$(VERSION)-$(GOOS)-$(GOARCH)) \
 		echo "Building $(OUT)" && \
 		GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 \
 			go build $(_TAGS_FLAG) -ldflags "$(LDFLAGS)" -o $(OUT) $(CMD) && \
@@ -155,8 +151,7 @@ release-all: web clean
 	@echo "Packaging archives..."
 	@cd $(DIST) && for f in $(APP)-*; do \
 		case "$$f" in \
-			*.tar.gz|*.zip) continue ;; \
-			*.exe) zip "$${f%.exe}.zip" "$$f" ;; \
+			*.tar.gz) continue ;; \
 			*)     tar czf "$$f.tar.gz" "$$f" ;; \
 		esac; \
 	done
@@ -172,8 +167,7 @@ release:
 	@mkdir -p $(DIST)
 	$(eval GOOS   := $(word 1,$(subst /, ,$(TARGET))))
 	$(eval GOARCH := $(word 2,$(subst /, ,$(TARGET))))
-	$(eval EXT    := $(if $(filter windows,$(GOOS)),.exe,))
-	$(eval OUT    := $(DIST)/$(APP)-$(VERSION)-$(GOOS)-$(GOARCH)$(EXT))
+	$(eval OUT    := $(DIST)/$(APP)-$(VERSION)-$(GOOS)-$(GOARCH))
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 \
 		go build $(_TAGS_FLAG) -ldflags "$(LDFLAGS)" -o $(OUT) $(CMD)
 	@echo "Built: $(OUT)"

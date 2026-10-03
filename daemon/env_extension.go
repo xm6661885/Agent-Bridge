@@ -34,7 +34,7 @@ func snapshotEnvDiscoverers() []EnvDiscoverer {
 var envNameRegexp = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // isValidEnvName reports whether s is a syntactically valid env-var
-// name. Used by every renderer (launchd / systemd / windows) so that
+// name. Used by every renderer (launchd / systemd) so that
 // malformed keys from discoverers or callers cannot leak into a
 // service file where they would either fail to parse or, worse,
 // inject syntax.

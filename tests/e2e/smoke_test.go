@@ -42,7 +42,7 @@ name = "test-project"
 type = "claudecode"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 
 [log]
 level = "info"
@@ -160,7 +160,7 @@ func TestSmoke_AllPlatformsInit(t *testing.T) {
 
 func listRegisteredPlatforms() []string {
 	platforms := []string{
-		"feishu", "lark", "weixin", "telegram", "qq", "qqbot",
+		"weixin", "telegram", "qq",
 	}
 	return platforms
 }

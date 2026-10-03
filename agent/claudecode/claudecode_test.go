@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -585,9 +584,6 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 	// Put a fake "my-cli" on PATH so New() passes its LookPath check.
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "my-cli")
-	if runtime.GOOS == "windows" {
-		fake += ".exe"
-	}
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

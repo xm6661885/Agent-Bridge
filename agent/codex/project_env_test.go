@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -120,4 +121,16 @@ func TestNew_ParsesProjectPromptsFromOpts(t *testing.T) {
 	if agent.appendPrompt != "Always use linear-bug-intake." {
 		t.Fatalf("appendPrompt = %q", agent.appendPrompt)
 	}
+}
+
+func envSliceToMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }

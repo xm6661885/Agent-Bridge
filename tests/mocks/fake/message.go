@@ -50,20 +50,6 @@ func TestMessageWithFiles(files []core.FileAttachment) *core.Message {
 	return msg
 }
 
-// TestMessageWithAudio creates a message with audio.
-func TestMessageWithAudio(audio *core.AudioAttachment) *core.Message {
-	msg := TestMessage()
-	msg.Audio = audio
-	return msg
-}
-
-// TestMessageFromVoice creates a message that originated from voice.
-func TestMessageFromVoice(content string) *core.Message {
-	msg := TestMessageWithContent(content)
-	msg.FromVoice = true
-	return msg
-}
-
 // TestLongMessage creates a message with a very long content for truncation testing.
 func TestLongMessage(length int) *core.Message {
 	return &core.Message{
@@ -101,16 +87,6 @@ func TestFileAttachment(mimeType, filename string, data []byte) core.FileAttachm
 		MimeType: mimeType,
 		Data:     data,
 		FileName: filename,
-	}
-}
-
-// TestAudioAttachment creates a test audio attachment.
-func TestAudioAttachment(mimeType, format string, data []byte, duration int) *core.AudioAttachment {
-	return &core.AudioAttachment{
-		MimeType: mimeType,
-		Data:     data,
-		Format:   format,
-		Duration: duration,
 	}
 }
 
@@ -196,16 +172,6 @@ func TestPermissionResultDeny(message string) core.PermissionResult {
 	return core.PermissionResult{
 		Behavior: "deny",
 		Message:  message,
-	}
-}
-
-// TestProviderConfig creates a test provider config.
-func TestProviderConfig(name, apiKey, baseURL, model string) core.ProviderConfig {
-	return core.ProviderConfig{
-		Name:    name,
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   model,
 	}
 }
 

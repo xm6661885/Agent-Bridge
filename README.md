@@ -2,28 +2,27 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to the chat apps you already use: **Weixin**, **Feishu/Lark**, **Telegram**, and **QQ** (OneBot/NapCat and the QQ Official Bot). Send a message from your phone, and the agent runs on your own machine against your own project.
+Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to the chat apps you already use: **Weixin**, **Telegram**, and **QQ** (OneBot/NapCat). Send a message from your phone, and the agent runs on your own machine against your own project.
 
 > Agent-Bridge is a heavily modified fork of [chenhg5/cc-connect](https://github.com/chenhg5/cc-connect). It was renamed, trimmed down, and reworked; it ships as an independent source tree without the upstream Git history. Thanks to the cc-connect authors for the original work.
 
 ## Features
 
 - **Agents**: Claude Code (`claudecode`) and Codex (`codex`).
-- **Platforms**: Weixin personal account (ilink, QR login), Feishu/Lark, Telegram, QQ via OneBot v11/NapCat (`qq`), QQ Official Bot (`qqbot`).
+- **Platforms**: Weixin personal account (ilink, QR login), Telegram, QQ via OneBot v11/NapCat (`qq`).
 - **Multiple projects**: each `[[projects]]` entry binds one agent + working directory to one or more platforms.
 - **Session management**: create, list, switch, rename, search, and delete conversations from chat.
 - **Live steering**: send a new message while the agent is running to add instructions to the current turn.
 - **Progress display**: optional collapsed tool activity and automatic cleanup of thinking/tool messages.
 - **Attachments**: images and files are staged and passed to the next agent prompt.
-- **Providers**: manage API providers per project (CLI, chat, or Web Admin).
 - **Web Admin**: built-in management UI with real-time chat over WebSocket.
-- **Daemon mode**: install as a systemd / launchd / Windows scheduled-task service.
+- **Daemon mode**: install as a systemd / launchd service.
 - **External automation**: trigger agent turns through the webhook; deliver files and media with `agent-bridge send`.
 - **No prompt injection**: Agent-Bridge never injects bridge or platform prompts into agent sessions.
 
 ## Differences from cc-connect
 
-- Trimmed messaging channels down to Weixin, Feishu, Telegram, and QQ (agent support was not the focus of the trimming).
+- Trimmed messaging channels down to Weixin, Telegram, and QQ (OneBot) (agent support was not the focus of the trimming).
 - Reworked file transfer logic: attachments are staged and delivered with the next prompt more reliably.
 - Messages sent while the agent is running steer the current turn instead of being queued.
 - `/reasoning` renamed to `/effort`; changing effort resumes the existing conversation.
@@ -33,14 +32,18 @@ Agent-Bridge connects local AI coding agents (**Claude Code** and **Codex**) to 
 - Removed built-in cron, timers, and agent heartbeat. Use an external scheduler that calls the webhook.
 - Removed multi-bot relay, `/bind`, and `relay send`.
 - Removed multi-workspace mode (`/workspace`) and OS-user isolation (`run_as_user`, `doctor user-isolation`).
-- `agent-bridge send` only delivers attachments and TTS voice; `-m` is a caption that must accompany `--image`/`--file`.
+- `agent-bridge send` only delivers attachments; `-m` is a caption that must accompany `--image`/`--file`.
 - No prompt injection of any kind. Put project instructions in `CLAUDE.md` / `AGENTS.md`. Claude Code only receives the `system_prompt` / `append_system_prompt` you configure explicitly.
 - English-only UI and messages. Removed language settings, auto detection, and `/lang`.
 - Removed update checks and `/upgrade`, plus `/status`, `/usage`, `/version`, `/config`, `/memory`, `/doctor`, `/web`, and `/ps` (`/btw`).
 - The context-compaction command is `/compact` (was `/compress`).
 - No skill discovery, registration, or injection (`/skills` removed). Unrecognized `/` commands pass through to the agent unchanged.
-- Removed provider presets and cc-switch import. Providers are added manually or linked to global providers.
-- Default data directory is `~/.agent-bridge`. Migration from older versions is manual; see [docs/MIGRATION.md](docs/MIGRATION.md).
+- Removed custom API providers (`/provider`, `agent-bridge provider`, `[[providers]]`). Claude Code and Codex use their own system configuration.
+- Removed TTS and speech-to-text (`/tts`, `[tts]`, `[speech]`). Incoming voice messages are passed to the agent as audio file attachments.
+- Removed `card_mode` and PowerShell/cmd shell support.
+- Removed Feishu/Lark and the official QQ bot (`qqbot`). Removed Windows support; runs on macOS and Linux.
+- Removed the i18n layer in both the Go code and the web UI (no i18next).
+- Default data directory is `~/.agent-bridge`. Migration from older versions is manual.
 
 ## Requirements
 
@@ -93,7 +96,7 @@ work_dir = "/path/to/project"
 mode = "default"
 
 [[projects.platforms]]
-type = "telegram"   # "feishu" | "weixin" | "telegram" | "qq" | "qqbot"
+type = "telegram"   # "weixin" | "telegram" | "qq"
 
 [projects.platforms.options]
 token = "${TELEGRAM_BOT_TOKEN}"
@@ -106,11 +109,9 @@ See [config.example.toml](config.example.toml) for every platform.
 
 | Platform | Type | Guide |
 | --- | --- | --- |
-| Feishu / Lark | `feishu` | [docs/feishu.md](docs/feishu.md) (or `agent-bridge feishu setup`) |
 | Weixin (ilink) | `weixin` | [docs/weixin.md](docs/weixin.md) (or `agent-bridge weixin setup`) |
 | Telegram | `telegram` | [docs/telegram.md](docs/telegram.md) |
 | QQ OneBot / NapCat | `qq` | [docs/qq.md](docs/qq.md) |
-| QQ Official Bot | `qqbot` | [docs/qqbot.md](docs/qqbot.md) |
 
 ## Chat commands
 
@@ -130,13 +131,11 @@ See [config.example.toml](config.example.toml) for every platform.
 | `/effort` | Change reasoning effort (keeps history) |
 | `/mode` | Change permission mode |
 | `/allow` | Approve tool permissions |
-| `/provider` | Show or switch provider |
 | `/quiet` | Toggle progress messages |
 | `/dir` (`/cd`) | Change working directory |
 | `/shell` (`/sh`, `/run`) | Run a shell command |
 | `/diff` | Show working-tree diff |
 | `/show` | Show a file |
-| `/tts` | Text-to-speech settings |
 | `/alias` | Manage command aliases |
 | `/commands` | Manage custom commands |
 | `/whoami` (`/myid`) | Show your user ID |
@@ -155,10 +154,10 @@ cleanup_progress_on_complete = true
 collapse_tool_messages = true
 ```
 
-- `cleanup_progress_on_complete` deletes thinking/tool messages when a turn ends on channels that support deletion (Telegram, Feishu). Assistant text and permission requests stay. Temporary API-retry and network diagnostics are removed after the final reply is delivered; on failure they stay visible.
+- `cleanup_progress_on_complete` deletes thinking/tool messages when a turn ends on channels that support deletion (e.g. Telegram). Assistant text and permission requests stay. Temporary API-retry and network diagnostics are removed after the final reply is delivered; on failure they stay visible.
 - `collapse_tool_messages` shows only the current activity (e.g. "Running command", "Reading files") without tool inputs/results, editing one progress message where supported.
 
-Images and files sent without text while idle wait for the next prompt. `/model`, `/effort`, `/mode`, and `/provider` keep staged attachments; `/new` and a successful `/switch` discard them. Claude Code API retries and network waits are forwarded as non-terminal status messages.
+Images and files sent without text while idle wait for the next prompt. `/model`, `/effort`, and `/mode` keep staged attachments; `/new` and a successful `/switch` discard them. Claude Code API retries and network waits are forwarded as non-terminal status messages.
 
 ## Web Admin
 
@@ -178,11 +177,9 @@ Then open `http://127.0.0.1:9820`. Keep it behind localhost, a VPN, or a reverse
 ```text
 agent-bridge [--config path] [--force]
 agent-bridge daemon install|uninstall|start|stop|restart|status|logs [-f] [-n N]
-agent-bridge send --image|--file|--audio|--video <path> | --tts <text>  [-m caption] [-p project] [-s session]
+agent-bridge send --image|--file|--audio|--video <path>  [-m caption] [-p project] [-s session]
 agent-bridge sessions list | show <id> [-n N]
 agent-bridge agent-sid
-agent-bridge provider add|list|remove --project <name> ...
-agent-bridge feishu setup|new|bind
 agent-bridge weixin setup|new|bind
 agent-bridge config example|format|path
 ```
@@ -197,9 +194,9 @@ There is no built-in scheduler. Enable `[webhook]` and call it from cron, system
 cmd/agent-bridge/  CLI and process entry point
 core/              sessions, routing, messages, platform-agnostic interfaces
 agent/             Claude Code and Codex adapters
-platform/          Weixin, Feishu, Telegram, QQ, QQ Bot
+platform/          Weixin, Telegram, QQ (OneBot)
 config/            config parsing
-daemon/            systemd / launchd / Windows service management
+daemon/            systemd / launchd service management
 web/src/           Web Admin source
 docs/              platform guides and migration notes
 ```
@@ -212,7 +209,7 @@ go test ./...
 cd web && pnpm build
 ```
 
-See [AGENTS.md](AGENTS.md) for contribution constraints.
+See [CLAUDE.md](CLAUDE.md) for contribution constraints.
 
 ## Credits
 

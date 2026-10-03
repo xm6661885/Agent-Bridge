@@ -92,8 +92,6 @@ func openBrowser(rawURL string) error {
 			return fmt.Errorf("xdg-open not found (headless server?): %w", err)
 		}
 		return exec.Command("xdg-open", rawURL).Start()
-	case "windows":
-		return exec.Command("cmd", "/c", "start", rawURL).Start()
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}

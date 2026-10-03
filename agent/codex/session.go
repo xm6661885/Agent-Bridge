@@ -28,8 +28,6 @@ type codexSession struct {
 	model          string
 	effort         string
 	mode           string
-	baseURL        string   // provider base URL; passed as -c openai_base_url=<url>
-	modelProvider  string   // Codex model_provider name; passed as -c model_provider=<name>
 	cmd            string   // CLI binary, default "codex"
 	cliExtraArgs   []string // extra args from cmd, prepended before exec args
 	extraEnv       []string
@@ -87,7 +85,7 @@ func prependCodexPromptPreamble(prompt string, preamble string) string {
 	return "Before answering, follow these project-level instructions for this agent-bridge session. They are not user content.\n\n" + preamble + "\n\n---\n\nUser message:\n" + prompt
 }
 
-func newCodexSession(ctx context.Context, cliBin string, cliExtraArgs []string, workDir, model, effort, mode, resumeID, baseURL string, extraEnv []string, modelProvider string, systemPrompt string, appendPrompt string) (*codexSession, error) {
+func newCodexSession(ctx context.Context, cliBin string, cliExtraArgs []string, workDir, model, effort, mode, resumeID string, extraEnv []string, systemPrompt string, appendPrompt string) (*codexSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &codexSession{
@@ -95,8 +93,6 @@ func newCodexSession(ctx context.Context, cliBin string, cliExtraArgs []string, 
 		model:          model,
 		effort:         effort,
 		mode:           mode,
-		baseURL:        baseURL,
-		modelProvider:  modelProvider,
 		cmd:            cliBin,
 		cliExtraArgs:   cliExtraArgs,
 		extraEnv:       extraEnv,
@@ -260,12 +256,6 @@ func (cs *codexSession) buildExecArgs(prompt string, imagePaths []string) []stri
 	if cs.model != "" {
 		args = append(args, "--model", cs.model)
 	}
-	if cs.modelProvider != "" {
-		args = append(args, "-c", fmt.Sprintf("model_provider=%q", cs.modelProvider))
-	}
-	if cs.baseURL != "" {
-		args = append(args, "-c", fmt.Sprintf("openai_base_url=%q", cs.baseURL))
-	}
 	if cs.effort != "" {
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", cs.effort))
 	}
@@ -276,7 +266,7 @@ func (cs *codexSession) buildExecArgs(prompt string, imagePaths []string) []stri
 			args = append(args, "--image", imagePath)
 		}
 		// codex exec resume does not support --cd; cmd.Dir handles cwd instead.
-		// Use stdin ("-") so multiline prompts are preserved reliably on Windows.
+		// Use stdin ("-") so multiline prompts are preserved reliably.
 		args = append(args, "--json", "-")
 	} else {
 		for _, imagePath := range imagePaths {

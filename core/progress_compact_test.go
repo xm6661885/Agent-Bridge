@@ -160,7 +160,7 @@ func TestParseProgressCardPayloadRejectsInvalid(t *testing.T) {
 
 func TestCompactProgressWriter_AppliesTransformToCardPayloadEntries(t *testing.T) {
 	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+		stubPlatformEngine: stubPlatformEngine{n: "telegram"},
 		style:              "card",
 		supportPayload:     true,
 	}
@@ -250,7 +250,7 @@ func TestCompactProgressWriter_ThrottlesRapidUpdates(t *testing.T) {
 
 func TestCompactProgressWriter_DoesNotTransformToolResults(t *testing.T) {
 	p := &stubCompactProgressPlatform{
-		stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+		stubPlatformEngine: stubPlatformEngine{n: "telegram"},
 		style:              "card",
 		supportPayload:     true,
 	}

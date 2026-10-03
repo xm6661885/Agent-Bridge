@@ -535,7 +535,7 @@ func TestStreamingPreviewConfigurationMatrix(t *testing.T) {
 			name: "disabled_for_platform_sends_final_once",
 			cfg: core.StreamPreviewCfg{
 				Enabled:           true,
-				DisabledPlatforms: []string{"feishu"},
+				DisabledPlatforms: []string{"telegram"},
 				IntervalMs:        1,
 				MinDeltaChars:     1,
 				MaxChars:          5000,
@@ -742,7 +742,6 @@ func TestDisplayVisibilityConfigurationMatrix(t *testing.T) {
 			engine, agent, platform := newTurnEngine(t)
 			engine.SetDisplayConfig(core.DisplayCfg{
 				Mode:             "full",
-				CardMode:         "legacy",
 				ThinkingMessages: tt.thinking,
 				ToolMessages:     tt.tools,
 				ThinkingMaxLen:   300,
@@ -776,49 +775,6 @@ func TestDisplayVisibilityConfigurationMatrix(t *testing.T) {
 	}
 }
 
-func TestRichCardModeKeepsToolStepsAndFinalMetadataInOneCard(t *testing.T) {
-	agent := newTurnAgent()
-	agent.model = "glm-5.1"
-	agent.workDir = "/tmp/release-agent"
-	platform := &richPreviewPlatform{}
-	engine := core.NewEngine("release-rich-card", agent, []core.Platform{platform}, t.TempDir()+"/sessions.json")
-	engine.SetReplyFooterEnabled(true)
-	engine.SetDisplayConfig(core.DisplayCfg{
-		Mode:             "full",
-		CardMode:         "rich",
-		ThinkingMessages: true,
-		ToolMessages:     true,
-		ThinkingMaxLen:   300,
-		ToolMaxLen:       500,
-	})
-	t.Cleanup(func() {
-		engine.Stop()
-		_ = agent.Stop()
-	})
-	agent.session.blockFirstResult()
-
-	msg := turnMessage("rich card tool turn")
-	go engine.ReceiveMessage(platform, msg)
-	agent.session.waitRecords(t, 1)
-
-	agent.session.emit(core.Event{Type: core.EventThinking, Content: "rich thinking"})
-	agent.session.emit(core.Event{Type: core.EventToolUse, ToolName: "Bash", ToolInput: "echo rich"})
-	agent.session.emit(core.Event{Type: core.EventToolResult, ToolName: "Bash", ToolResult: "rich output", ToolStatus: "completed"})
-	agent.session.releaseFirstResult(core.Event{Type: core.EventResult, Content: "rich final", InputTokens: 28000, Done: true})
-	platform.waitPreviewUpdates(t, 3)
-
-	texts, starts, updates, deletes := platform.snapshotPreviewLifecycle()
-	if len(texts) != 0 || len(starts) != 1 || len(updates) == 0 || len(deletes) != 0 {
-		t.Fatalf("rich lifecycle = texts:%#v starts:%#v updates:%#v deletes:%#v, want one editable rich card", texts, starts, updates, deletes)
-	}
-	final := updates[len(updates)-1]
-	for _, want := range []string{"status=done", "step=Bash", "rich output", "markdown=rich final", "[ctx: ~14%] · glm-5.1"} {
-		if !strings.Contains(final, want) {
-			t.Fatalf("final rich card = %q, want contains %q", final, want)
-		}
-	}
-}
-
 type previewLifecyclePlatform struct {
 	turnPlatform
 
@@ -828,7 +784,7 @@ type previewLifecyclePlatform struct {
 	previewDeletes []any
 }
 
-func (p *previewLifecyclePlatform) Name() string { return "feishu" }
+func (p *previewLifecyclePlatform) Name() string { return "telegram" }
 
 func (p *previewLifecyclePlatform) KeepPreviewOnFinish() bool { return true }
 
@@ -905,41 +861,6 @@ func (p *previewLifecyclePlatform) snapshotPreviewLifecycle() (texts []string, s
 		append([]string(nil), p.previewStarts...),
 		append([]string(nil), p.previewUpdates...),
 		append([]any(nil), p.previewDeletes...)
-}
-
-type richPreviewPlatform struct {
-	previewLifecyclePlatform
-}
-
-func (p *richPreviewPlatform) BuildRichCard(status core.CardStatus, title string, steps []core.ToolStep, markdown string, streaming bool, statusFooter string) string {
-	var b strings.Builder
-	b.WriteString("status=")
-	b.WriteString(string(status))
-	if streaming {
-		b.WriteString(" streaming=true")
-	}
-	b.WriteString("\n")
-	for _, step := range steps {
-		b.WriteString("step=")
-		b.WriteString(step.Name)
-		b.WriteString(" summary=")
-		b.WriteString(step.Summary)
-		if step.Result != "" {
-			b.WriteString(" result=")
-			b.WriteString(step.Result)
-		}
-		b.WriteString("\n")
-	}
-	if markdown != "" {
-		b.WriteString("markdown=")
-		b.WriteString(markdown)
-		b.WriteString("\n")
-	}
-	if statusFooter != "" {
-		b.WriteString(statusFooter)
-		b.WriteString("\n")
-	}
-	return b.String()
 }
 
 func assertStableSideChannelOnly(t *testing.T, platform *turnPlatform, sideText string) {

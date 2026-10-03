@@ -11,7 +11,7 @@
 //
 // Run:
 //
-//	AGENT_BRIDGE_BLACKBOX_CLAUDECODE_API_KEY=xxx \
+//	ANTHROPIC_API_KEY=xxx \
 //	go test -tags blackbox ./tests/blackbox/p2/... -timeout 600s -v
 package p2
 

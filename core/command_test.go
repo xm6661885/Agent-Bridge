@@ -217,7 +217,7 @@ func TestMatchPrefix(t *testing.T) {
 		id    string
 	}{
 		{[]string{"help"}, "help"},
-		{[]string{"provider", "pro"}, "provider"},
+		{[]string{"quiet", "qt"}, "quiet"},
 		{[]string{"list", "ls"}, "list"},
 		{[]string{"new"}, "new"},
 	}
@@ -228,9 +228,9 @@ func TestMatchPrefix(t *testing.T) {
 	}{
 		{"help", "help"},
 		{"h", "help"},
-		{"provider", "provider"},
-		{"pro", "provider"},
-		{"p", "provider"},
+		{"quiet", "quiet"},
+		{"qt", "quiet"},
+		{"q", "quiet"},
 		{"list", "list"},
 		{"ls", "list"},
 		{"l", "list"},

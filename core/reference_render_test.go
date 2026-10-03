@@ -3,20 +3,19 @@ package core
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestTransformLocalReferences_DisabledWithoutNormalizeAgents(t *testing.T) {
 	cfg := ReferenceRenderCfg{
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "basename",
 		MarkerStyle:     "none",
 		EnclosureStyle:  "none",
 	}
 	input := "See /root/code/demo/src/app.ts:42"
-	got := TransformLocalReferences(input, cfg, "codex", "feishu", "/root/code/demo")
+	got := TransformLocalReferences(input, cfg, "codex", "weixin", "/root/code/demo")
 	if got != input {
 		t.Fatalf("TransformLocalReferences() = %q, want unchanged %q", got, input)
 	}
@@ -30,7 +29,7 @@ func TestTransformLocalReferences_UsesAllScopes(t *testing.T) {
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
-	got := TransformLocalReferences("See /root/code/demo/src/app.ts:42", cfg, "codex", "feishu", "/root/code/demo")
+	got := TransformLocalReferences("See /root/code/demo/src/app.ts:42", cfg, "codex", "weixin", "/root/code/demo")
 	if !strings.Contains(got, "`app.ts:42`") {
 		t.Fatalf("TransformLocalReferences() = %q, want rendered basename reference", got)
 	}
@@ -39,13 +38,13 @@ func TestTransformLocalReferences_UsesAllScopes(t *testing.T) {
 func TestTransformLocalReferences_PreservesWebMarkdownLinks(t *testing.T) {
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "basename",
 		MarkerStyle:     "none",
 		EnclosureStyle:  "none",
 	}
 	input := "Docs: [OpenAI](https://openai.com/) and [app.ts](/root/code/demo/src/app.ts#L42)"
-	got := TransformLocalReferences(input, cfg, "codex", "feishu", "/root/code/demo")
+	got := TransformLocalReferences(input, cfg, "codex", "weixin", "/root/code/demo")
 	if !strings.Contains(got, "[OpenAI](https://openai.com/)") {
 		t.Fatalf("TransformLocalReferences() = %q, want web link preserved", got)
 	}
@@ -70,18 +69,15 @@ func TestTransformLocalReferences_PreservesInlineCodePathRange(t *testing.T) {
 }
 
 func TestTransformLocalReferences_PreservesWebMarkdownLinksAfterInlineCodeReference(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"claudecode"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
 	input := "`/root/code/.claude/settings.json:5-10`\n[OpenAI](https://openai.com/)"
-	got := TransformLocalReferences(input, cfg, "claudecode", "feishu", "/root/code")
+	got := TransformLocalReferences(input, cfg, "claudecode", "weixin", "/root/code")
 	want := "`.claude/settings.json:5-10`\n[OpenAI](https://openai.com/)"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)
@@ -91,30 +87,27 @@ func TestTransformLocalReferences_PreservesWebMarkdownLinksAfterInlineCodeRefere
 func TestTransformLocalReferences_SmartDisplayFallsBackOnBasenameCollision(t *testing.T) {
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "smart",
 		MarkerStyle:     "none",
 		EnclosureStyle:  "none",
 	}
 	input := "Compare /root/code/demo/src/app.ts and /root/code/demo/tests/app.ts"
-	got := TransformLocalReferences(input, cfg, "codex", "feishu", "/root/code/demo")
+	got := TransformLocalReferences(input, cfg, "codex", "weixin", "/root/code/demo")
 	if !strings.Contains(got, "src/app.ts") || !strings.Contains(got, "tests/app.ts") {
 		t.Fatalf("TransformLocalReferences() = %q, want dirname+basename for both colliding refs", got)
 	}
 }
 
 func TestTransformLocalReferences_RelativeDisplayUsesWorkspace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
-	got := TransformLocalReferences("Look at /root/code/demo/src/app.ts:42:7", cfg, "codex", "feishu", "/root/code/demo")
+	got := TransformLocalReferences("Look at /root/code/demo/src/app.ts:42:7", cfg, "codex", "weixin", "/root/code/demo")
 	want := "`src/app.ts:42:7`"
 	if !strings.Contains(got, want) {
 		t.Fatalf("TransformLocalReferences() = %q, want substring %q", got, want)
@@ -124,13 +117,13 @@ func TestTransformLocalReferences_RelativeDisplayUsesWorkspace(t *testing.T) {
 func TestTransformLocalReferences_RelativeInputIsNotSplitByAbsoluteMatcher(t *testing.T) {
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
 	input := "See lean-steward/src/lean_topo_steward/prompting/instructions/global_instructions.py:42"
-	got := TransformLocalReferences(input, cfg, "codex", "feishu", "/root/code")
+	got := TransformLocalReferences(input, cfg, "codex", "weixin", "/root/code")
 	want := "See `lean-steward/src/lean_topo_steward/prompting/instructions/global_instructions.py:42`"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)
@@ -138,9 +131,6 @@ func TestTransformLocalReferences_RelativeInputIsNotSplitByAbsoluteMatcher(t *te
 }
 
 func TestTransformLocalReferences_ChineseListSeparatorsDoNotMergeCandidates(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	workspace := t.TempDir()
 	filePath := filepath.Join(workspace, "demo-repo", "README")
 	profileDir := filepath.Join(workspace, "demo-repo", "src", "components", "profile")
@@ -160,13 +150,13 @@ func TestTransformLocalReferences_ChineseListSeparatorsDoNotMergeCandidates(t *t
 
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"claudecode"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
 	input := "第 1 步：正在处理路径 demo-repo/README、" + profileDir + "、" + profileExtDir + "、" + specDir + "。"
-	got := TransformLocalReferences(input, cfg, "claudecode", "feishu", workspace)
+	got := TransformLocalReferences(input, cfg, "claudecode", "weixin", workspace)
 	want := "第 1 步：正在处理路径 `demo-repo/README`、`demo-repo/src/components/profile/`、`demo-repo/src/components/profile.ts/`、`demo-repo/docs/spec.v1/`。"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)
@@ -174,9 +164,6 @@ func TestTransformLocalReferences_ChineseListSeparatorsDoNotMergeCandidates(t *t
 }
 
 func TestTransformLocalReferences_ExistingDirectoryWithoutTrailingSlashIsDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	workspace := t.TempDir()
 	dirPath := filepath.Join(workspace, "demo-repo", "src", "components")
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
@@ -185,12 +172,12 @@ func TestTransformLocalReferences_ExistingDirectoryWithoutTrailingSlashIsDir(t *
 
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
-	got := TransformLocalReferences("Dir "+dirPath, cfg, "codex", "feishu", workspace)
+	got := TransformLocalReferences("Dir "+dirPath, cfg, "codex", "weixin", workspace)
 	want := "Dir `demo-repo/src/components/`"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)
@@ -198,18 +185,15 @@ func TestTransformLocalReferences_ExistingDirectoryWithoutTrailingSlashIsDir(t *
 }
 
 func TestTransformLocalReferences_WorkspaceRootDisplaysAsRelativeRoot(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	workspace := t.TempDir()
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
-	got := TransformLocalReferences("Root "+workspace, cfg, "codex", "feishu", workspace)
+	got := TransformLocalReferences("Root "+workspace, cfg, "codex", "weixin", workspace)
 	want := "Root `./`"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)
@@ -217,19 +201,16 @@ func TestTransformLocalReferences_WorkspaceRootDisplaysAsRelativeRoot(t *testing
 }
 
 func TestTransformLocalReferences_UnknownNoExtPathKeepsNoMarker(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TransformLocalReferences path handling assumes Unix separators")
-	}
 	workspace := t.TempDir()
 	unknown := filepath.Join(workspace, "mysterypath")
 	cfg := ReferenceRenderCfg{
 		NormalizeAgents: []string{"codex"},
-		RenderPlatforms: []string{"feishu"},
+		RenderPlatforms: []string{"weixin"},
 		DisplayPath:     "relative",
 		MarkerStyle:     "emoji",
 		EnclosureStyle:  "code",
 	}
-	got := TransformLocalReferences("Unknown "+unknown, cfg, "codex", "feishu", workspace)
+	got := TransformLocalReferences("Unknown "+unknown, cfg, "codex", "weixin", workspace)
 	want := "Unknown `mysterypath`"
 	if got != want {
 		t.Fatalf("TransformLocalReferences() = %q, want %q", got, want)

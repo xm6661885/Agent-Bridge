@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, Send, User, Bot, Circle, WifiOff,
@@ -245,24 +244,23 @@ function ImageBlock({ url }: { url: string }) {
 }
 
 function StatusBadge({ status }: { status: BridgeStatus }) {
-  const { t } = useTranslation();
   if (status === 'connected') {
     return (
       <span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full">
-        <Circle size={5} className="fill-current" /> {t('sessions.bridgeConnected')}
+        <Circle size={5} className="fill-current" /> {"connected"}
       </span>
     );
   }
   if (status === 'connecting' || status === 'registering') {
     return (
       <span className="flex items-center gap-1 text-[10px] text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 px-1.5 py-0.5 rounded-full">
-        <Loader2 size={9} className="animate-spin" /> {t('sessions.bridgeConnecting')}
+        <Loader2 size={9} className="animate-spin" /> {"connecting..."}
       </span>
     );
   }
   return (
     <span className="flex items-center gap-1 text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-full">
-      <WifiOff size={9} /> {t('sessions.bridgeDisconnected')}
+      <WifiOff size={9} /> {"disconnected"}
     </span>
   );
 }
@@ -288,7 +286,6 @@ function MsgCopyButton({ text }: { text: string }) {
 // ── Main component ───────────────────────────────────────────
 
 export default function ChatView() {
-  const { t } = useTranslation();
   const { name: projectName } = useParams<{ name: string }>();
 
   // Session state
@@ -591,7 +588,7 @@ export default function ChatView() {
             >
               <span>{userPickedSession && currentSession
                 ? (currentSession.name || currentSession.id.slice(0, 8))
-                : t('chat.defaultSession')}</span>
+                : "Web Session"}</span>
               <ChevronDown size={12} />
             </button>
           </div>
@@ -605,8 +602,8 @@ export default function ChatView() {
             <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mb-4">
               <Bot size={32} className="text-accent" />
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">{t('chat.emptyHint')}</p>
-            <p className="text-xs text-gray-400 dark:text-gray-500">{t('chat.slashHint')}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">{"Start a conversation with your agent"}</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500">{"Press / to see available commands"}</p>
           </div>
         )}
         {messages.map((msg) => {
@@ -627,7 +624,7 @@ export default function ChatView() {
                 msg.streaming && 'animate-pulse-subtle',
               )}>
                 {isEmpty ? (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 italic">{t('chat.unsupportedMessage', '[Unsupported message]')}</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 italic">{"[Unsupported message]"}</p>
                 ) : msg.format === 'card' ? (
                   <CardBlock card={msg.card} onAction={handleCardAction} />
                 ) : msg.format === 'buttons' && msg.buttons ? (
@@ -689,7 +686,7 @@ export default function ChatView() {
                     ? 'bg-accent/15 text-accent ring-1 ring-accent/30'
                     : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.06]',
                 )}
-                title={t('chat.commands')}
+                title={"Commands"}
               >
                 <Slash size={18} />
               </button>
@@ -707,7 +704,7 @@ export default function ChatView() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={t('chat.inputPlaceholder')}
+                placeholder={"Type a message or press / for commands..."}
                 className="w-full px-4 py-3 text-sm rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors placeholder:text-gray-400"
                 disabled={sending}
               />
@@ -726,17 +723,17 @@ export default function ChatView() {
         ) : !bridgeCfg ? (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
             <WifiOff size={14} />
-            <span>{t('sessions.bridgeNotAvailable')}</span>
+            <span>{"Bridge not available. Enable [bridge] in config.toml to chat from web."}</span>
           </div>
         ) : bridgeStatus === 'disconnected' || bridgeStatus === 'error' ? (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
             <WifiOff size={14} />
-            <span>{t('sessions.bridgeDisconnected')}</span>
+            <span>{"disconnected"}</span>
           </div>
         ) : (
           <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
             <Loader2 size={14} className="animate-spin" />
-            <span>{t('sessions.bridgeConnecting')}</span>
+            <span>{"connecting..."}</span>
           </div>
         )}
       </div>

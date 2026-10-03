@@ -188,7 +188,6 @@ func TestP2_78_HideThinkingMessages_ClaudeCode(t *testing.T) {
 	env := helper.NewEnvWithSetup(t, "claudecode", func(e *core.Engine) {
 		e.SetDisplayConfig(core.DisplayCfg{
 			Mode:             "full",
-			CardMode:         "legacy",
 			ThinkingMessages: false, // ← key config
 			ThinkingMaxLen:   300,
 			ToolMessages:     true,
@@ -223,7 +222,6 @@ func TestP2_79_HideToolMessages_ClaudeCode(t *testing.T) {
 	env := helper.NewEnvWithSetup(t, "claudecode", func(e *core.Engine) {
 		e.SetDisplayConfig(core.DisplayCfg{
 			Mode:             "full",
-			CardMode:         "legacy",
 			ThinkingMessages: true,
 			ThinkingMaxLen:   300,
 			ToolMessages:     false, // ← key config
@@ -265,7 +263,6 @@ func TestP2_77_DisplayModeCompact_ClaudeCode(t *testing.T) {
 	env := helper.NewEnvWithSetup(t, "claudecode", func(e *core.Engine) {
 		e.SetDisplayConfig(core.DisplayCfg{
 			Mode:             "compact", // ← key config
-			CardMode:         "legacy",
 			ThinkingMessages: true,
 			ThinkingMaxLen:   300,
 			ToolMessages:     true,

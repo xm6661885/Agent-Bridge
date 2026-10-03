@@ -71,33 +71,6 @@ func (m *MockAgentSession) Close() error {
 	return args.Error(0)
 }
 
-// MockAgentWithProviders is a mock agent that also implements ProviderSwitcher.
-type MockAgentWithProviders struct {
-	*MockAgent
-}
-
-func (m *MockAgentWithProviders) SetProviders(providers []core.ProviderConfig) {
-	m.Called(providers)
-}
-
-func (m *MockAgentWithProviders) SetActiveProvider(name string) bool {
-	args := m.Called(name)
-	return args.Bool(0)
-}
-
-func (m *MockAgentWithProviders) GetActiveProvider() *core.ProviderConfig {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-	return args.Get(0).(*core.ProviderConfig)
-}
-
-func (m *MockAgentWithProviders) ListProviders() []core.ProviderConfig {
-	args := m.Called()
-	return args.Get(0).([]core.ProviderConfig)
-}
-
 // MockAgentWithModel is a mock agent that also implements ModelSwitcher.
 type MockAgentWithModel struct {
 	*MockAgent
@@ -249,7 +222,6 @@ func (m *MockAgentWithSessionEnv) SetSessionEnv(env []string) {
 // MockAgentFull implements all optional interfaces for comprehensive testing.
 type MockAgentFull struct {
 	*MockAgent
-	*MockAgentWithProviders
 	*MockAgentWithModel
 	*MockAgentWithMode
 	*MockAgentWithToolAuth
@@ -266,7 +238,6 @@ type MockAgentFull struct {
 func NewMockAgentFull(name string) *MockAgentFull {
 	m := &MockAgentFull{
 		MockAgent:                      new(MockAgent),
-		MockAgentWithProviders:         new(MockAgentWithProviders),
 		MockAgentWithModel:             new(MockAgentWithModel),
 		MockAgentWithMode:              new(MockAgentWithMode),
 		MockAgentWithToolAuth:          new(MockAgentWithToolAuth),

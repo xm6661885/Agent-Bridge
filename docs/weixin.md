@@ -2,7 +2,7 @@
 
 本文档说明如何通过 **agent-bridge** 接入**微信个人号**侧的对话能力。底层使用腾讯 **ilink 机器人 HTTP 网关**（与 OpenClaw 插件 `openclaw-weixin` 同类接口：`getUpdates` 长轮询 + `sendMessage` 下发）。
 
-> **说明**：这是「个人微信 + ilink」通道，与 **[企业微信 WeChat Work](wecom.md)**（`type = "wecom"`）不是同一套协议，请勿混淆。
+> **说明**：这是「个人微信 + ilink」通道，与企业微信（WeChat Work）不是同一套协议，请勿混淆。
 
 ---
 
@@ -109,7 +109,7 @@ token = "ilink_bot_bearer_token"       # 必填；扫码或 bind 写入
 - **文字、引用、语音转写文本**：与网关一致。
 - **图片 / 文件 / 视频 / 语音文件**：支持从微信 CDN 下载并按 AES-128-ECB 解密后交给 Agent（需正确配置 `cdn_base_url` 等）。
 - **出站图片与文件**：平台实现了 `ImageSender` / `FileSender`，可通过 `agent-bridge send --image` / `--file` 等能力下发（需引擎侧已支持附件发送）。
-- **语音 SILK**：无转写文字时可走 STT（需配置语音转写且通常依赖 ffmpeg）。
+- **语音 SILK**：网关提供转写文字时直接使用文字；否则下载原始 SILK 音频，作为文件附件交给 Agent。
 
 ---
 

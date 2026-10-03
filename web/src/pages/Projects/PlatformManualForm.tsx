@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, ChevronDown, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { addPlatformToProject } from '@/api/projects';
@@ -16,7 +15,6 @@ interface Props {
 }
 
 export default function PlatformManualForm({ platformType, projectName, workDir, agentType, onComplete, onCancel }: Props) {
-  const { t } = useTranslation();
   const meta = platformMeta[platformType];
   const [values, setValues] = useState<Record<string, any>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -26,7 +24,7 @@ export default function PlatformManualForm({ platformType, projectName, workDir,
   if (!meta) {
     return (
       <div className="py-4 text-center text-sm text-gray-500">
-        {t('setup.unsupportedPlatform', 'Unsupported platform type: {{type}}', { type: platformType })}
+        {`Unsupported platform type: ${platformType}`}
       </div>
     );
   }
@@ -50,7 +48,7 @@ export default function PlatformManualForm({ platformType, projectName, workDir,
   const handleSave = async () => {
     const missing = meta.fields.filter(f => fieldVisible(f) && f.required && !values[f.key]);
     if (missing.length > 0) {
-      setError(missing.map(f => t(f.labelKey)).join(', ') + ' required');
+      setError(missing.map(f => f.label).join(', ') + ' required');
       return;
     }
 
@@ -81,7 +79,7 @@ export default function PlatformManualForm({ platformType, projectName, workDir,
       <p className="text-sm font-medium text-gray-900 dark:text-white">{meta.label}</p>
 
       {basicFields.map(f => (
-        <FieldInput key={f.key} field={f} value={values[f.key]} onChange={v => set(f.key, v)} t={t} />
+        <FieldInput key={f.key} field={f} value={values[f.key]} onChange={v => set(f.key, v)} />
       ))}
 
       {advancedFields.length > 0 && (
@@ -92,10 +90,10 @@ export default function PlatformManualForm({ platformType, projectName, workDir,
             className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
           >
             <ChevronDown size={12} className={cn('transition-transform', showAdvanced && 'rotate-180')} />
-            {t('setup.advancedOptions', 'Advanced options')} ({advancedFields.length})
+            {"Advanced options"} ({advancedFields.length})
           </button>
           {showAdvanced && advancedFields.map(f => (
-            <FieldInput key={f.key} field={f} value={values[f.key]} onChange={v => set(f.key, v)} t={t} />
+            <FieldInput key={f.key} field={f} value={values[f.key]} onChange={v => set(f.key, v)} />
           ))}
         </>
       )}
@@ -107,17 +105,17 @@ export default function PlatformManualForm({ platformType, projectName, workDir,
       )}
 
       <div className="flex justify-between pt-2">
-        <Button variant="secondary" size="sm" onClick={onCancel}>{t('common.back')}</Button>
-        <Button onClick={handleSave} loading={saving}>{t('setup.addPlatform', 'Add platform')}</Button>
+        <Button variant="secondary" size="sm" onClick={onCancel}>{"Back"}</Button>
+        <Button onClick={handleSave} loading={saving}>{"Add platform"}</Button>
       </div>
     </div>
   );
 }
 
-function FieldInput({ field, value, onChange, t }: { field: FieldDef; value: any; onChange: (v: any) => void; t: (key: string) => string }) {
+function FieldInput({ field, value, onChange }: { field: FieldDef; value: any; onChange: (v: any) => void }) {
   const [showPwd, setShowPwd] = useState(false);
-  const label = t(field.labelKey);
-  const hint = field.hintKey ? t(field.hintKey) : undefined;
+  const label = field.label;
+  const hint = field.hint;
 
   if (field.type === 'select' && field.options?.length) {
     return (

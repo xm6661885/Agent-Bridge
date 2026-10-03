@@ -1,5 +1,4 @@
 import { NavLink } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -7,21 +6,18 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
-  Plug,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
 const navItems = [
-  { key: 'dashboard', path: '/', icon: LayoutDashboard },
-  { key: 'projects', path: '/projects', icon: FolderKanban },
-  { key: 'providers', path: '/providers', icon: Plug },
-  { key: 'chat', path: '/chat', icon: MessageSquare },
-  { key: 'system', path: '/system', icon: Settings },
+  { key: 'dashboard', label: "Dashboard", path: '/', icon: LayoutDashboard },
+  { key: 'projects', label: "Projects", path: '/projects', icon: FolderKanban },
+  { key: 'chat', label: "Chat", path: '/chat', icon: MessageSquare },
+  { key: 'system', label: "System", path: '/system', icon: Settings },
 ];
 
 export default function Sidebar() {
-  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -54,7 +50,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
-        {navItems.map(({ key, path, icon: Icon }) => (
+        {navItems.map(({ key, label, path, icon: Icon }) => (
           <NavLink
             key={key}
             to={path}
@@ -69,7 +65,7 @@ export default function Sidebar() {
             }
           >
             <Icon size={18} className="shrink-0" />
-            {!collapsed && <span>{t(`nav.${key}`)}</span>}
+            {!collapsed && <span>{label}</span>}
           </NavLink>
         ))}
       </nav>

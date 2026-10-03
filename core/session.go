@@ -25,21 +25,14 @@ const ExplicitActivationTTL = 7 * 24 * time.Hour
 
 // Session tracks one conversation between a user and the agent.
 type Session struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	AgentSessionID      string   `json:"agent_session_id"`
-	AgentType           string   `json:"agent_type,omitempty"`
-	PastAgentSessionIDs []string `json:"past_agent_session_ids,omitempty"`
-	// ActiveProvider is the agent provider name that was active when this
-	// session last took a turn. It is restored before --resume so that a
-	// agent-bridge process restart does not silently drop a user's
-	// `/provider switch` (the agent_session_id survives on disk while the
-	// in-memory active provider does not). Empty means "no explicit choice
-	// — use whatever the agent's default is".
-	ActiveProvider string         `json:"active_provider,omitempty"`
-	History        []HistoryEntry `json:"history"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	ID                  string         `json:"id"`
+	Name                string         `json:"name"`
+	AgentSessionID      string         `json:"agent_session_id"`
+	AgentType           string         `json:"agent_type,omitempty"`
+	PastAgentSessionIDs []string       `json:"past_agent_session_ids,omitempty"`
+	History             []HistoryEntry `json:"history"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
 	// LastUserActivity records when a real user message was last received.
 	// Unlike UpdatedAt (bumped by every session.Unlock including heartbeats and
 	// unsolicited agent output), this field is only updated when the engine
@@ -203,24 +196,6 @@ func (s *Session) GetUpdatedAt() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.UpdatedAt
-}
-
-// SetActiveProvider atomically records the provider name the user last
-// switched to for this session. Pass an empty string to clear the choice
-// (e.g. on `/provider clear`). Callers are expected to call
-// SessionManager.Save() afterwards so the value survives a process restart.
-func (s *Session) SetActiveProvider(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ActiveProvider = name
-}
-
-// GetActiveProvider atomically reads the provider name the user last
-// switched to for this session. Empty means "no explicit choice".
-func (s *Session) GetActiveProvider() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ActiveProvider
 }
 
 // SetAgentSessionID atomically sets the agent session ID and agent type.

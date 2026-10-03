@@ -78,14 +78,10 @@ func NewEnvWithSetup(t *testing.T, agentType string, setup func(*core.Engine)) *
 		"work_dir": workDir,
 	}
 
-	applyProviderFromEnv(t, agentType, opts)
-
 	agent, err := core.CreateAgent(agentType, opts)
 	if err != nil {
 		t.Skipf("blackbox skip: cannot create %s agent: %v", agentType, err)
 	}
-
-	wireProviders(t, agentType, agent)
 
 	mp := bbplatform.New(agentType + "-mock")
 
@@ -259,102 +255,14 @@ func requireAgent(t *testing.T, agentType string) {
 	}
 	switch agentType {
 	case "claudecode":
-		if os.Getenv("ANTHROPIC_API_KEY") == "" && !hasProviderEnv("claudecode") {
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
 			t.Skipf("blackbox skip: ANTHROPIC_API_KEY not set")
 		}
 	case "codex":
-		if os.Getenv("OPENAI_API_KEY") == "" && !hasProviderEnv("codex") {
+		if os.Getenv("OPENAI_API_KEY") == "" {
 			t.Skipf("blackbox skip: OPENAI_API_KEY not set")
 		}
 	}
-}
-
-// hasProviderEnv checks if a AGENT_BRIDGE_BLACKBOX_<AGENT>_API_KEY override is set.
-// Allows CI to inject credentials specifically for blackbox tests without
-// polluting the main API key env vars.
-func hasProviderEnv(agentType string) bool {
-	key := "AGENT_BRIDGE_BLACKBOX_" + strings.ToUpper(agentType) + "_API_KEY"
-	return os.Getenv(key) != ""
-}
-
-// applyProviderFromEnv injects API credentials into agent opts.
-// Preference order:
-//  1. AGENT_BRIDGE_BLACKBOX_<AGENT>_BASE_URL + AGENT_BRIDGE_BLACKBOX_<AGENT>_API_KEY (test-specific)
-//  2. Standard env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
-func applyProviderFromEnv(t *testing.T, agentType string, opts map[string]any) {
-	t.Helper()
-	prefix := "AGENT_BRIDGE_BLACKBOX_" + strings.ToUpper(agentType) + "_"
-
-	apiKey := os.Getenv(prefix + "API_KEY")
-	baseURL := os.Getenv(prefix + "BASE_URL")
-	model := os.Getenv(prefix + "MODEL")
-
-	if apiKey == "" {
-		switch agentType {
-		case "claudecode":
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
-			baseURL = os.Getenv("ANTHROPIC_BASE_URL")
-		case "codex":
-			apiKey = os.Getenv("OPENAI_API_KEY")
-			baseURL = os.Getenv("OPENAI_BASE_URL")
-		}
-	}
-
-	if apiKey != "" {
-		opts["api_key"] = apiKey
-	}
-	if baseURL != "" {
-		opts["base_url"] = baseURL
-	}
-	if model != "" {
-		opts["model"] = model
-	}
-}
-
-// wireProviders calls SetProviders on the agent when AGENT_BRIDGE_BLACKBOX_<AGENT>_API_KEY
-// is set, giving agents (e.g. claudecode) their credentials via the provider
-// interface rather than relying solely on ANTHROPIC_API_KEY env vars.
-//
-// Supported env vars (prefix = AGENT_BRIDGE_BLACKBOX_<AGENTTYPE>_):
-//
-//	<prefix>API_KEY   — required (use a test-specific key or local auth)
-//	<prefix>BASE_URL  — provider base URL / proxy endpoint
-//	<prefix>MODEL     — model override
-//	<prefix>WIRE_API  — codex wire API format, e.g. "chat" or "responses"
-//
-// Agent-specific base URL injection:
-//   - claudecode: base_url → stored in ProviderConfig.BaseURL (provider sets ANTHROPIC_BASE_URL)
-func wireProviders(t *testing.T, agentType string, agent core.Agent) {
-	t.Helper()
-	ps, ok := agent.(core.ProviderSwitcher)
-	if !ok {
-		return
-	}
-
-	prefix := "AGENT_BRIDGE_BLACKBOX_" + strings.ToUpper(agentType) + "_"
-	apiKey := os.Getenv(prefix + "API_KEY")
-	baseURL := os.Getenv(prefix + "BASE_URL")
-	model := os.Getenv(prefix + "MODEL")
-	wireAPI := os.Getenv(prefix + "WIRE_API")
-
-	if apiKey == "" {
-		return
-	}
-	if apiKey == "" && model == "" {
-		return
-	}
-
-	provider := core.ProviderConfig{
-		Name:         "blackbox-test",
-		APIKey:       apiKey,
-		BaseURL:      baseURL,
-		Model:        model,
-		CodexWireAPI: wireAPI,
-	}
-
-	ps.SetProviders([]core.ProviderConfig{provider})
-	ps.SetActiveProvider("blackbox-test")
-	t.Logf("blackbox: wired provider base_url=%s model=%s wire_api=%s", baseURL, model, wireAPI)
 }
 
 func agentBinName(agentType string) string {

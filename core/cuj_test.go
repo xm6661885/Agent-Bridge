@@ -496,7 +496,7 @@ func TestCUJ_B6_NameRenamesCurrentSession(t *testing.T) {
 	}
 
 	// 5. User-visible reply must surface the new name so user knows the
-	// rename succeeded (the i18n message includes the name).
+	// rename succeeded (the message includes the name).
 	if !env.sentContains("my-cool-project") {
 		t.Fatalf("/name reply did not echo the new name. Got: %v",
 			env.plat.getSent())
@@ -874,8 +874,18 @@ func TestCUJ_A2_MultiTurnAgentReceivesHistory(t *testing.T) {
 func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	plat := &stubPlatformEngine{n: "test"}
 	agent := &cujAgent{}
-	dir := t.TempDir()
+	// The engine keeps writing session/attachment files briefly after the
+	// agent receives the message, so use a best-effort cleanup instead of
+	// t.TempDir (whose strict RemoveAll races with those writes).
+	dir, err := os.MkdirTemp("", "cuj-attach-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json")
+	t.Cleanup(func() {
+		_ = e.Stop()
+		_ = os.RemoveAll(dir)
+	})
 
 	msg := &Message{
 		SessionKey: "test:img", Platform: "test", MessageID: "img1",
@@ -903,43 +913,22 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	}
 }
 
-// CUJ-A4 · User sends voice → without STT configured, user gets a clear
-// "voice not enabled" message (the actual STT branch is covered by
-// platform-specific tests).
-func TestCUJ_A4_VoiceMessageWithoutSTTSurfacesClearMessage(t *testing.T) {
-	plat := &stubPlatformEngine{n: "test"}
-	agent := &cujAgent{}
-	dir := t.TempDir()
-	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json")
-
-	msg := &Message{
-		SessionKey: "test:voice", Platform: "test", MessageID: "v1",
-		UserID: "voice", UserName: "voice",
-		Audio:    &AudioAttachment{MimeType: "audio/ogg", Format: "ogg", Data: []byte("fake-ogg")},
-		ReplyCtx: "ctx",
-	}
-	e.ReceiveMessage(plat, msg)
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if len(plat.getSent()) > 0 {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatal("voice message without STT got NO user-facing reply")
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-}
-
 // CUJ-A5 · User uploads file → engine routes it to the agent.
 func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 	plat := &stubPlatformEngine{n: "test"}
 	agent := &cujAgent{}
-	dir := t.TempDir()
+	// The engine keeps writing session/attachment files briefly after the
+	// agent receives the message, so use a best-effort cleanup instead of
+	// t.TempDir (whose strict RemoveAll races with those writes).
+	dir, err := os.MkdirTemp("", "cuj-attach-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json")
+	t.Cleanup(func() {
+		_ = e.Stop()
+		_ = os.RemoveAll(dir)
+	})
 
 	msg := &Message{
 		SessionKey: "test:file", Platform: "test", MessageID: "f1",
@@ -1195,7 +1184,7 @@ func TestCUJ_C5_StopKeepsSameSession(t *testing.T) {
 	}
 }
 
-// CUJ-C6 · /mode switches permission mode; verified via i18n reply text.
+// CUJ-C6 · /mode switches permission mode; verified via reply text.
 func TestCUJ_C6_ModeSwitchAcknowledged(t *testing.T) {
 	env := newCUJEnv(t)
 	env.userSends("c6", "hi")
@@ -1293,12 +1282,6 @@ func TestCUJ_D6_InboundRateLimitDrops(t *testing.T) {
 // ===========================================================================
 // SPRINT 2 · F organization (config switching)
 // ===========================================================================
-
-// CUJ-F1 · /provider switches LLM provider for the next message — provider
-// management lives outside core/engine.go (per-agent). Linked.
-func TestCUJ_F1_ProviderSwitchLinkedToAgent(t *testing.T) {
-	t.Log("CUJ-F1: provider switching is per-agent; covered by agent/*_test.go provider tests")
-}
 
 // CUJ-F2 · /model switches model — same pattern as F1, agent-managed.
 func TestCUJ_F2_ModelSwitchLinkedToAgent(t *testing.T) {
@@ -1447,9 +1430,9 @@ func TestCUJ_G5_ToolFailureSurfacesToUser(t *testing.T) {
 
 // CUJ-G6 · Network flap: undelivered outbound messages eventually arrive
 // once the transport recovers. Platform-specific retry logic; covered by
-// platform/feishu/token_retry_test.go and transient_retry_test.go.
+// platform/telegram/token_retry_test.go and transient_retry_test.go.
 func TestCUJ_G6_NetworkFlapLinkedToPlatformLayer(t *testing.T) {
-	t.Log("CUJ-G6: covered by platform/feishu/{token_retry,transient_retry}_test.go")
+	t.Log("CUJ-G6: covered by platform/telegram/{token_retry,transient_retry}_test.go")
 }
 
 // ===========================================================================
@@ -1471,17 +1454,6 @@ func TestCUJ_H3_SharedSessionLinkedToIntegration(t *testing.T) {
 // ===========================================================================
 // SPRINT 2 · I organization (UI rendering correctness)
 // ===========================================================================
-
-// CUJ-I1 · Rich card mode produces valid card JSON for the platform.
-// Covered by platform/feishu/card_test.go and release-gate TestAGENT_BRIDGE_CARD_01_rich.
-func TestCUJ_I1_RichCardLinkedToPlatformAndIntegration(t *testing.T) {
-	t.Log("CUJ-I1: covered by platform/feishu/card_test.go + release-gate TestAGENT_BRIDGE_CARD_01_rich")
-}
-
-// CUJ-I2 · Legacy card mode for backwards-compatibility.
-func TestCUJ_I2_LegacyCardLinkedToIntegration(t *testing.T) {
-	t.Log("CUJ-I2: covered by release-gate TestAGENT_BRIDGE_CARD_02_legacy")
-}
 
 // CUJ-I3 · Display modes (quiet/compact/full) each produce expected output.
 func TestCUJ_I3_DisplayModesLinkedToIntegration(t *testing.T) {

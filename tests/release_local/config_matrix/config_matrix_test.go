@@ -31,7 +31,7 @@ type = "claudecode"
 work_dir = "/tmp/agent-bridge-release-work"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 app_id = "cli_release"
 app_secret = "secret"
 `
@@ -43,7 +43,6 @@ attachment_send = "off"
 
 [display]
 mode = "quiet"
-card_mode = "rich"
 thinking_messages = true
 tool_messages = false
 
@@ -53,7 +52,6 @@ reset_on_idle_mins = 0
 
 [projects.display]
 mode = "full"
-card_mode = "legacy"
 thinking_messages = false
 tool_messages = true
 thinking_max_len = 111
@@ -64,7 +62,7 @@ type = "claudecode"
 work_dir = "/tmp/agent-bridge-release-work"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 app_id = "cli_release"
 app_secret = "secret"
 `)
@@ -97,9 +95,6 @@ app_secret = "secret"
 	if thinkingMax != 111 || toolMax != 222 {
 		t.Fatalf("max lens = %d/%d, want 111/222", thinkingMax, toolMax)
 	}
-	if got := config.EffectiveCardMode(cfg, proj); got != "legacy" {
-		t.Fatalf("card mode = %q, want project legacy override", got)
-	}
 }
 
 func TestReleaseConfig_DefaultsKeepAttachmentsAndFullDisplayEnabled(t *testing.T) {
@@ -115,16 +110,13 @@ func TestReleaseConfig_DefaultsKeepAttachmentsAndFullDisplayEnabled(t *testing.T
 	if mode != config.DisplayModeFull || !thinking || !tools {
 		t.Fatalf("display = mode:%s thinking:%v tools:%v, want full/true/true", mode, thinking, tools)
 	}
-	if got := config.EffectiveCardMode(cfg, &cfg.Projects[0]); got != "legacy" {
-		t.Fatalf("card mode = %q, want default legacy", got)
-	}
 }
 
 func TestReleaseConfig_BehaviorControlSwitchesParseFromLoadedConfig(t *testing.T) {
 	path := writeConfig(t, `
 [stream_preview]
 enabled = false
-disabled_platforms = ["feishu", "telegram"]
+disabled_platforms = ["qq", "telegram"]
 interval_ms = 250
 min_delta_chars = 12
 max_chars = 777
@@ -137,7 +129,6 @@ disabled_commands = ["restart", "shell"]
 
 [projects.display]
 mode = "quiet"
-card_mode = "rich"
 thinking_messages = false
 tool_messages = false
 
@@ -146,7 +137,7 @@ type = "claudecode"
 work_dir = "/tmp/agent-bridge-release-work"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 app_id = "cli_release"
 app_secret = "secret"
 `)
@@ -158,7 +149,7 @@ app_secret = "secret"
 	if cfg.StreamPreview.Enabled == nil || *cfg.StreamPreview.Enabled {
 		t.Fatalf("stream_preview.enabled = %#v, want false", cfg.StreamPreview.Enabled)
 	}
-	if got := strings.Join(cfg.StreamPreview.DisabledPlatforms, ","); got != "feishu,telegram" {
+	if got := strings.Join(cfg.StreamPreview.DisabledPlatforms, ","); got != "qq,telegram" {
 		t.Fatalf("stream_preview.disabled_platforms = %#v", cfg.StreamPreview.DisabledPlatforms)
 	}
 	if cfg.StreamPreview.IntervalMs == nil || *cfg.StreamPreview.IntervalMs != 250 {
@@ -184,9 +175,6 @@ app_secret = "secret"
 	mode, thinking, tools, _, _, _, _, _ := config.EffectiveDisplay(cfg, proj)
 	if mode != config.DisplayModeQuiet || thinking || tools {
 		t.Fatalf("display = mode:%s thinking:%v tools:%v, want quiet/false/false", mode, thinking, tools)
-	}
-	if got := config.EffectiveCardMode(cfg, proj); got != "rich" {
-		t.Fatalf("card mode = %q, want rich", got)
 	}
 }
 
@@ -217,7 +205,7 @@ type = "claudecode"
 work_dir = "/tmp/agent-bridge-release-work"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 app_id = "cli_release"
 app_secret = "secret"
 `,
@@ -235,7 +223,7 @@ type = "claudecode"
 work_dir = "/tmp/agent-bridge-release-work"
 
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 app_id = "cli_release"
 app_secret = "secret"
 `,

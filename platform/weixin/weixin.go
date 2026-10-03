@@ -52,7 +52,7 @@ const (
 //     does not throttle replies on interactive deployments, so the push-path
 //     budget must NOT consume them.
 //   - sendPathPush: proactive push (cron / timer / file transfer / SendImage /
-//     SendFile / SendAudio). Counts against burst_limit.
+//     SendFile). Counts against burst_limit.
 //
 // File transfers count as push because they share the same outbound
 // sendMessage endpoint and are exactly the kind of "separate-message" traffic
@@ -563,11 +563,11 @@ func (p *Platform) dispatchInbound(ctx context.Context, m *weixinMessage, h core
 	}
 
 	body := bodyFromItemList(m.ItemList)
-	images, files, audio := p.collectInboundMedia(ctx, m.ItemList)
-	if strings.TrimSpace(body) == "" && len(images) == 0 && len(files) == 0 && audio == nil && mediaOnlyItems(m.ItemList) {
+	images, files := p.collectInboundMedia(ctx, m.ItemList)
+	if strings.TrimSpace(body) == "" && len(images) == 0 && len(files) == 0 && mediaOnlyItems(m.ItemList) {
 		body = "[Media message received, but CDN download/decrypt failed or cdn_base_url is not configured; please describe it in text.]"
 	}
-	if strings.TrimSpace(body) == "" && len(images) == 0 && len(files) == 0 && audio == nil {
+	if strings.TrimSpace(body) == "" && len(images) == 0 && len(files) == 0 {
 		return
 	}
 
@@ -586,7 +586,6 @@ func (p *Platform) dispatchInbound(ctx context.Context, m *weixinMessage, h core
 		Content:    body,
 		Images:     images,
 		Files:      files,
-		Audio:      audio,
 		ReplyCtx:   rc,
 	})
 }

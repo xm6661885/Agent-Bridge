@@ -44,8 +44,6 @@ type Agent struct {
 	appendPrompt    string
 	cmd             string   // CLI binary name, default "codex"
 	cliExtraArgs    []string // extra args parsed from cmd after the binary
-	providers       []core.ProviderConfig
-	activeIdx       int      // -1 = no provider set
 	configEnv       []string // env vars from [projects.agent.options.env] — persists across SetSessionEnv calls
 	sessionEnv      []string
 	mu              sync.RWMutex
@@ -104,7 +102,6 @@ func New(opts map[string]any) (core.Agent, error) {
 		cmd:             cmd,
 		cliExtraArgs:    cliExtraArgs,
 		configEnv:       configEnv,
-		activeIdx:       -1,
 	}, nil
 }
 
@@ -185,7 +182,7 @@ func (a *Agent) SetModel(model string) {
 func (a *Agent) GetModel() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return core.GetProviderModel(a.providers, a.activeIdx, a.model)
+	return a.model
 }
 
 func (a *Agent) SetReasoningEffort(effort string) {
@@ -205,17 +202,8 @@ func (a *Agent) AvailableReasoningEfforts() []string {
 	return []string{"low", "medium", "high", "xhigh", "max"}
 }
 
-func (a *Agent) configuredModels() []core.ModelOption {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return core.GetProviderModels(a.providers, a.activeIdx)
-}
-
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 	if models := readCodexModelCatalog(); len(models) > 0 {
-		return models
-	}
-	if models := a.configuredModels(); len(models) > 0 {
 		return models
 	}
 	if models := a.fetchModelsFromAPI(ctx); len(models) > 0 {
@@ -284,24 +272,11 @@ func isCodexChatModel(id string) bool {
 }
 
 func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
-	a.mu.Lock()
-	apiKey := ""
-	baseURL := ""
-	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
-		apiKey = a.providers[a.activeIdx].APIKey
-		baseURL = a.providers[a.activeIdx].BaseURL
-	}
-	a.mu.Unlock()
-
-	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-	}
+	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		return nil
 	}
-	if baseURL == "" {
-		baseURL = os.Getenv("OPENAI_BASE_URL")
-	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
@@ -476,38 +451,19 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	workDir := a.workDir
 	// Order matters for MergeEnv override semantics (later wins):
 	//   1. configEnv — static env from [projects.agent.options.env]
-	//   2. providerEnv — per-provider keys (OPENAI_API_KEY etc.)
-	//   3. sessionEnv — runtime overrides from /env or admin actions
+	//   2. sessionEnv — runtime overrides from /env or admin actions
 	extraEnv := append([]string(nil), a.configEnv...)
-	extraEnv = append(extraEnv, a.providerEnvLocked()...)
 	extraEnv = append(extraEnv, a.sessionEnv...)
-	var baseURL string
-	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
-		if m := a.providers[a.activeIdx].Model; m != "" {
-			model = m
-		}
-		baseURL = a.providers[a.activeIdx].BaseURL
-	}
-	provName, provAPIKey, provWireAPI, provHeaders := a.activeProviderCodexConfig()
 	a.mu.Unlock()
 
-	if provName != "" {
-		if err := ensureCodexProviderConfig(codexHome, provName, baseURL, provWireAPI, provHeaders); err != nil {
-			slog.Warn("codex: failed to write provider config", "provider", provName, "error", err)
-		}
-		if err := ensureCodexAuth(codexHome, provAPIKey); err != nil {
-			slog.Warn("codex: failed to write auth.json", "provider", provName, "error", err)
-		}
-	}
-
 	if backend == "app_server" {
-		return newAppServerSession(ctx, appServerURL, workDir, model, reasoningEffort, mode, sessionID, baseURL, provName, extraEnv, codexHome, systemPrompt, appendPrompt)
+		return newAppServerSession(ctx, appServerURL, workDir, model, reasoningEffort, mode, sessionID, extraEnv, codexHome, systemPrompt, appendPrompt)
 	}
 	if codexHome != "" {
 		extraEnv = append(extraEnv, "CODEX_HOME="+codexHome)
 	}
 
-	return newCodexSession(ctx, cliBin, cliExtraArgs, workDir, model, reasoningEffort, mode, sessionID, baseURL, extraEnv, provName, systemPrompt, appendPrompt)
+	return newCodexSession(ctx, cliBin, cliExtraArgs, workDir, model, reasoningEffort, mode, sessionID, extraEnv, systemPrompt, appendPrompt)
 }
 
 func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error) {
@@ -581,84 +537,6 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 // are not reliably executed in exec/resume mode — they may be treated as plain text.
 // Native slash commands are not reliably executed in exec/resume mode.
 func (a *Agent) CompressCommand() string { return "" }
-
-// ── ProviderSwitcher implementation ──────────────────────────
-
-func (a *Agent) SetProviders(providers []core.ProviderConfig) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.providers = providers
-}
-
-func (a *Agent) SetActiveProvider(name string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if name == "" {
-		a.activeIdx = -1
-		slog.Info("codex: provider cleared")
-		return true
-	}
-	for i, p := range a.providers {
-		if p.Name == name {
-			a.activeIdx = i
-			slog.Info("codex: provider switched", "provider", name)
-			return true
-		}
-	}
-	return false
-}
-
-func (a *Agent) GetActiveProvider() *core.ProviderConfig {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.activeIdx < 0 || a.activeIdx >= len(a.providers) {
-		return nil
-	}
-	p := a.providers[a.activeIdx]
-	return &p
-}
-
-func (a *Agent) ListProviders() []core.ProviderConfig {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	result := make([]core.ProviderConfig, len(a.providers))
-	copy(result, a.providers)
-	return result
-}
-
-func (a *Agent) providerEnvLocked() []string {
-	if a.activeIdx < 0 || a.activeIdx >= len(a.providers) {
-		return nil
-	}
-	p := a.providers[a.activeIdx]
-	var env []string
-	if p.APIKey != "" {
-		env = append(env, "OPENAI_API_KEY="+p.APIKey)
-	}
-	if p.BaseURL != "" {
-		env = append(env, "OPENAI_BASE_URL="+p.BaseURL)
-	}
-	for k, v := range p.Env {
-		env = append(env, k+"="+v)
-	}
-	return env
-}
-
-// activeProviderCodexConfig returns Codex-specific config for the active provider.
-// Returns non-empty name when the provider has codex config (wire_api, headers)
-// OR when it has a BaseURL (third-party provider needing auth.json).
-func (a *Agent) activeProviderCodexConfig() (name string, apiKey string, wireAPI string, headers map[string]string) {
-	if a.activeIdx < 0 || a.activeIdx >= len(a.providers) {
-		return
-	}
-	p := a.providers[a.activeIdx]
-	hasCodexConfig := p.CodexWireAPI != "" || len(p.CodexHTTPHeaders) > 0
-	isThirdParty := p.BaseURL != "" && p.APIKey != ""
-	if !hasCodexConfig && !isThirdParty {
-		return
-	}
-	return p.Name, p.APIKey, p.CodexWireAPI, p.CodexHTTPHeaders
-}
 
 // PermissionModes returns the supported codex permission modes.
 //

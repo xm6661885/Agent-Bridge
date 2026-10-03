@@ -584,10 +584,10 @@ func TestRegression_SessionHistory(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// R-240: Feishu Card Rendering
+// R-240: Card Rendering
 // ---------------------------------------------------------------------------
 
-func TestRegression_FeishuCardRender(t *testing.T) {
+func TestRegression_CardRender(t *testing.T) {
 	// Create a card using the builder
 	card := core.NewCard().
 		Title("Test Card", "blue").
@@ -617,7 +617,7 @@ func TestRegression_FeishuCardRender(t *testing.T) {
 	buttons := card.CollectButtons()
 	assert.NotEmpty(t, buttons)
 
-	t.Log("Feishu card render: PASS")
+	t.Log("Card render: PASS")
 }
 
 func TestRegression_CardButtons(t *testing.T) {

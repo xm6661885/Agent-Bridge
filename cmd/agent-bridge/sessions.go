@@ -434,7 +434,7 @@ Options:
   -h, --help         Show this help
 
 Session ID formats for 'show':
-  <project>:<session>   e.g. "feishu_bot_64788ce0:s1"
+  <project>:<session>   e.g. "telegram_bot_64788ce0:s1"
   <number> or #<number> Index from 'sessions list', e.g. "1" or "#1"
 
 Prune options:

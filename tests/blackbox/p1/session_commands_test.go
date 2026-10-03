@@ -8,8 +8,8 @@
 //
 // Run:
 //
-//	AGENT_BRIDGE_BLACKBOX_CLAUDECODE_API_KEY=xxx \
-//	AGENT_BRIDGE_BLACKBOX_CLAUDECODE_BASE_URL=https://... \
+//	ANTHROPIC_API_KEY=xxx \
+//	ANTHROPIC_BASE_URL=https://... \
 //	go test -tags blackbox ./tests/blackbox/p1/... -timeout 1200s -v
 package p1
 

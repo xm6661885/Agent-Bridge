@@ -67,7 +67,7 @@ func TestNoteUserTurnCompleted(t *testing.T) {
 
 func TestDiscardStaleUserMessageIfNeeded(t *testing.T) {
 	e := newTestEngine()
-	sessionKey := "feishu:oc_chat:ou_user"
+	sessionKey := "telegram:oc_chat:ou_user"
 	e.interactiveMu.Lock()
 	e.interactiveStates[sessionKey] = &interactiveState{
 		lastCompletedUserMessageTimeMs: 2_000,
@@ -76,7 +76,7 @@ func TestDiscardStaleUserMessageIfNeeded(t *testing.T) {
 
 	stale := &Message{
 		SessionKey:        sessionKey,
-		Platform:          "feishu",
+		Platform:          "telegram",
 		MessageID:         "om_redelivery",
 		UserMessageTimeMs: 1_000,
 		Content:           "old task",
@@ -87,7 +87,7 @@ func TestDiscardStaleUserMessageIfNeeded(t *testing.T) {
 
 	fresh := &Message{
 		SessionKey:        sessionKey,
-		Platform:          "feishu",
+		Platform:          "telegram",
 		MessageID:         "om_new",
 		UserMessageTimeMs: 2_500,
 		Content:           "new task",
@@ -119,7 +119,7 @@ func TestDiscardStaleUserMessageIfNeeded(t *testing.T) {
 
 func TestNoteUserMessageAccepted(t *testing.T) {
 	e := newTestEngine()
-	sessionKey := "feishu:oc_chat:ou_user"
+	sessionKey := "telegram:oc_chat:ou_user"
 	e.interactiveMu.Lock()
 	e.interactiveStates[sessionKey] = &interactiveState{}
 	e.interactiveMu.Unlock()
@@ -147,8 +147,8 @@ func TestNoteUserMessageAccepted(t *testing.T) {
 func TestQueueMessageForBusySession_RejectsStaleBeforeEnqueue(t *testing.T) {
 	e := newTestEngine()
 	e.maxQueuedMessages = 5
-	sessionKey := "feishu:oc_chat:ou_user"
-	p := &stubPlatformEngine{n: "feishu"}
+	sessionKey := "telegram:oc_chat:ou_user"
+	p := &stubPlatformEngine{n: "telegram"}
 
 	e.interactiveMu.Lock()
 	e.interactiveStates[sessionKey] = &interactiveState{
@@ -159,7 +159,7 @@ func TestQueueMessageForBusySession_RejectsStaleBeforeEnqueue(t *testing.T) {
 
 	msg := &Message{
 		SessionKey:        sessionKey,
-		Platform:          "feishu",
+		Platform:          "telegram",
 		MessageID:         "om_stale_queue",
 		UserMessageTimeMs: 3_000,
 		Content:           "stale while busy",
@@ -185,7 +185,7 @@ func TestQueueMessageForBusySession_RejectsStaleBeforeEnqueue(t *testing.T) {
 
 	msg = &Message{
 		SessionKey:        sessionKey,
-		Platform:          "feishu",
+		Platform:          "telegram",
 		MessageID:         "om_a_redelivery",
 		UserMessageTimeMs: 7_000,
 		Content:           "A while B processing",

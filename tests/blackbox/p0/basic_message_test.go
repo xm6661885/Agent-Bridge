@@ -12,7 +12,7 @@
 //
 // Run against a specific agent:
 //
-//	AGENT_BRIDGE_BLACKBOX_CLAUDECODE_API_KEY=xxx go test -tags blackbox \
+//	ANTHROPIC_API_KEY=xxx go test -tags blackbox \
 //	    ./tests/blackbox/p0/... -run ClaudeCode -timeout 1800s -v
 package p0
 

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import { Zap, AlertCircle, Sun, Moon, Monitor } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { useThemeStore } from '@/store/theme';
@@ -8,7 +7,6 @@ import { api } from '@/api/client';
 import { getStatus } from '@/api/status';
 
 export default function Login() {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const loginStore = useAuthStore((s) => s.login);
@@ -34,13 +32,13 @@ export default function Login() {
         navigate('/', { replace: true });
       } catch {
         setToken(qToken);
-        setError(t('login.invalidToken'));
+        setError("Invalid or expired token");
         api.setToken('');
       } finally {
         setLoading(false);
       }
     })();
-  }, [searchParams, loginStore, navigate, t]);
+  }, [searchParams, loginStore, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,7 +51,7 @@ export default function Login() {
       loginStore(token.trim(), serverUrl.trim());
       navigate('/');
     } catch {
-      setError(t('login.invalidToken'));
+      setError("Invalid or expired token");
       api.setToken('');
     } finally {
       setLoading(false);
@@ -85,8 +83,8 @@ export default function Login() {
             </div>
           </div>
           
-          <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white mb-1">{t('login.title')}</h1>
-          <p className="text-sm text-center text-gray-500 dark:text-gray-400 mb-8">{t('login.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white mb-1">{"Agent-Bridge Admin"}</h1>
+          <p className="text-sm text-center text-gray-500 dark:text-gray-400 mb-8">{"Connect to your Agent-Bridge instance"}</p>
 
           {error && (
             <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg px-4 py-3 mb-4">
@@ -97,7 +95,7 @@ export default function Login() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t('login.token')}</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{"API token"}</label>
               <input
                 type="password"
                 value={token}
@@ -109,7 +107,7 @@ export default function Login() {
             </div>
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {t('login.serverUrl')} <span className="text-gray-400 font-normal">({t('common.optional')})</span>
+                {"Server URL"} <span className="text-gray-400 font-normal">({"optional"})</span>
               </label>
               <input
                 type="text"
@@ -132,7 +130,7 @@ export default function Login() {
               ) : (
                 <Zap size={16} />
               )}
-              {t('login.connect')}
+              {"Connect"}
             </button>
           </form>
         </div>

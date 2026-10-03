@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Platform abstracts a messaging platform (Feishu, DingTalk, Slack, etc.).
+// Platform abstracts a messaging platform (Weixin, Telegram, QQ, etc.).
 type Platform interface {
 	Name() string
 	Start(handler MessageHandler) error
@@ -64,7 +64,7 @@ type TypingIndicator interface {
 // TypingIndicatorDone is an optional interface for platforms that can show a
 // "done" reaction after processing completes. The engine calls AddDoneReaction
 // when the agent finishes a multi-round turn in quiet mode, so the user gets
-// a push notification (e.g. Feishu card edits don't trigger pushes).
+// a push notification (e.g. message edits that do not trigger pushes).
 type TypingIndicatorDone interface {
 	AddDoneReaction(replyCtx any)
 }
@@ -86,7 +86,7 @@ type MessageUpdater interface {
 
 // StatusFooterSender is an optional Platform extension for sending a reply
 // with a structured per-turn status footer rendered using platform-specific
-// dim/small styling (e.g. Lark `text_size: "notation"`). Platforms that do
+// dim/small styling (e.g. small notation text). Platforms that do
 // not implement it fall back to receiving the footer appended inline to the
 // content via Send/SendWithButtons/...
 type StatusFooterSender interface {
@@ -140,7 +140,7 @@ type InlineButtonSender interface {
 }
 
 // CardSender is an optional interface for platforms that support sending
-// structured rich cards (e.g. Feishu Interactive Card). Platforms that do not
+// structured rich cards (interactive cards). Platforms that do not
 // implement this interface will receive a plain-text fallback via Card.RenderText().
 type CardSender interface {
 	SendCard(ctx context.Context, replyCtx any, card *Card) error
@@ -148,7 +148,7 @@ type CardSender interface {
 }
 
 // CardNavigationHandler is called by platforms to render a card for in-place
-// card updates (e.g. Feishu card.action.trigger callback). The action string
+// card updates (card action callbacks). The action string
 // uses prefixes like "nav:/model" or "act:/model 3".
 type CardNavigationHandler func(action string, sessionKey string) *Card
 
@@ -245,28 +245,6 @@ type ToolAuthorizer interface {
 // conversation history from their backend session files.
 type HistoryProvider interface {
 	GetSessionHistory(ctx context.Context, sessionID string, limit int) ([]HistoryEntry, error)
-}
-
-// ProviderConfig holds API provider settings for an agent.
-type ProviderConfig struct {
-	Name     string
-	APIKey   string
-	BaseURL  string
-	Model    string
-	Models   []ModelOption     // pre-configured list of available models for this provider
-	Thinking string            // override thinking type sent to this provider ("disabled", "enabled", or "" for no rewrite)
-	Env      map[string]string // arbitrary extra env vars (e.g. CLAUDE_CODE_USE_BEDROCK=1)
-	// Codex-specific provider config (maps to Codex model_providers.<name>)
-	CodexWireAPI     string            // wire API format (e.g. "responses")
-	CodexHTTPHeaders map[string]string // custom HTTP headers
-}
-
-// ProviderSwitcher is an optional interface for agents that support multiple API providers.
-type ProviderSwitcher interface {
-	SetProviders(providers []ProviderConfig)
-	SetActiveProvider(name string) bool
-	GetActiveProvider() *ProviderConfig
-	ListProviders() []ProviderConfig
 }
 
 // ModelSwitcher is an optional interface for agents that support runtime model switching.
@@ -509,4 +487,16 @@ const (
 // updating the visual status of a preview card header.
 type PreviewStatusUpdater interface {
 	SetPreviewStatus(previewHandle any, status CardStatus)
+}
+
+// AudioSender is an optional interface for platforms that can send native
+// audio messages (used by `agent-bridge send --audio`).
+type AudioSender interface {
+	SendAudio(ctx context.Context, replyCtx any, audio []byte, format string) error
+}
+
+// VideoSender is an optional interface for platforms that can send native
+// video messages (used by `agent-bridge send --video`).
+type VideoSender interface {
+	SendVideo(ctx context.Context, replyCtx any, video []byte, format string, fileName string) error
 }

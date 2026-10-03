@@ -3,7 +3,6 @@ package telegram
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,8 +21,6 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-var telegramConvertAudioToOpus = core.ConvertAudioToOpus
-
 func init() {
 	core.RegisterPlatform("telegram", New)
 }
@@ -40,8 +37,6 @@ type telegramBot interface {
 	SendMessage(ctx context.Context, params *tgbot.SendMessageParams) (*models.Message, error)
 	SendPhoto(ctx context.Context, params *tgbot.SendPhotoParams) (*models.Message, error)
 	SendDocument(ctx context.Context, params *tgbot.SendDocumentParams) (*models.Message, error)
-	SendVoice(ctx context.Context, params *tgbot.SendVoiceParams) (*models.Message, error)
-	SendAudio(ctx context.Context, params *tgbot.SendAudioParams) (*models.Message, error)
 	SendChatAction(ctx context.Context, params *tgbot.SendChatActionParams) (bool, error)
 	EditMessageText(ctx context.Context, params *tgbot.EditMessageTextParams) (*models.Message, error)
 	DeleteMessage(ctx context.Context, params *tgbot.DeleteMessageParams) (bool, error)
@@ -507,12 +502,11 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 			UserID: userID, UserName: userName, ChatName: chatName,
 			MessageID:  strconv.Itoa(msg.ID),
 			ChannelKey: channelKey,
-			Audio: &core.AudioAttachment{
+			Files: []core.FileAttachment{{
 				MimeType: msg.Voice.MimeType,
 				Data:     audioData,
-				Format:   "ogg",
-				Duration: msg.Voice.Duration,
-			},
+				FileName: "voice.ogg",
+			}},
 			ReplyCtx: rctx,
 		}, msg)
 		return
@@ -532,17 +526,20 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 				format = parts[1]
 			}
 		}
+		fileName := msg.Audio.FileName
+		if fileName == "" {
+			fileName = "audio." + format
+		}
 		p.dispatchMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "telegram",
 			UserID: userID, UserName: userName, ChatName: chatName,
 			MessageID:  strconv.Itoa(msg.ID),
 			ChannelKey: channelKey,
-			Audio: &core.AudioAttachment{
+			Files: []core.FileAttachment{{
 				MimeType: msg.Audio.MimeType,
 				Data:     audioData,
-				Format:   format,
-				Duration: msg.Audio.Duration,
-			},
+				FileName: fileName,
+			}},
 			ReplyCtx: rctx,
 		}, msg)
 		return
@@ -1410,94 +1407,6 @@ func (p *Platform) SendFile(ctx context.Context, rctx any, file core.FileAttachm
 	return nil
 }
 
-// SendAudio sends synthesized audio back to Telegram.
-// It prefers voice messages and falls back to audio files for mp3/m4a on sendVoice failure.
-func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format string) error {
-	rc, ok := rctx.(replyContext)
-	if !ok {
-		return fmt.Errorf("telegram: SendAudio: invalid reply context type %T", rctx)
-	}
-
-	sendData := audio
-	sendFormat := strings.ToLower(strings.TrimSpace(format))
-	if sendFormat == "" {
-		sendFormat = "ogg"
-	}
-
-	switch sendFormat {
-	case "ogg", "opus", "mp3", "m4a":
-		// Attempt these formats directly with sendVoice first.
-	default:
-		converted, err := telegramConvertAudioToOpus(ctx, audio, sendFormat)
-		if err != nil {
-			return fmt.Errorf("telegram: SendAudio: convert %s to opus: %w", sendFormat, err)
-		}
-		sendData = converted
-		sendFormat = "opus"
-	}
-
-	if err := p.sendVoice(ctx, rc, sendData, sendFormat); err != nil {
-		if sendFormat == "mp3" || sendFormat == "m4a" {
-			if fallbackErr := p.sendAudio(ctx, rc, sendData, sendFormat); fallbackErr == nil {
-				return nil
-			} else {
-				return fmt.Errorf(
-					"telegram: SendAudio: %w",
-					errors.Join(
-						fmt.Errorf("sendVoice failed: %w", err),
-						fmt.Errorf("sendAudio fallback failed: %w", fallbackErr),
-					),
-				)
-			}
-		}
-		return fmt.Errorf("telegram: SendAudio: sendVoice: %w", err)
-	}
-	return nil
-}
-
-func (p *Platform) sendVoice(ctx context.Context, rc replyContext, audio []byte, format string) error {
-	bot, err := p.connectedBot("send voice")
-	if err != nil {
-		return err
-	}
-	params := &tgbot.SendVoiceParams{
-		ChatID:          rc.chatID,
-		MessageThreadID: rc.threadID,
-		Voice:           &models.InputFileUpload{Filename: "tts_audio." + telegramAudioFileExt(format), Data: bytes.NewReader(audio)},
-	}
-	if _, err := bot.SendVoice(ctx, params); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (p *Platform) sendAudio(ctx context.Context, rc replyContext, audio []byte, format string) error {
-	bot, err := p.connectedBot("send audio")
-	if err != nil {
-		return err
-	}
-	params := &tgbot.SendAudioParams{
-		ChatID:          rc.chatID,
-		MessageThreadID: rc.threadID,
-		Audio:           &models.InputFileUpload{Filename: "tts_audio." + telegramAudioFileExt(format), Data: bytes.NewReader(audio)},
-	}
-	if _, err := bot.SendAudio(ctx, params); err != nil {
-		return err
-	}
-	return nil
-}
-
-func telegramAudioFileExt(format string) string {
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "oga":
-		return "ogg"
-	case "":
-		return "bin"
-	default:
-		return strings.ToLower(strings.TrimSpace(format))
-	}
-}
-
 // SendWithButtons sends a message with an inline keyboard.
 func (p *Platform) SendWithButtons(ctx context.Context, rctx any, content string, buttons [][]core.ButtonOption) error {
 	rc, ok := rctx.(replyContext)
@@ -2052,5 +1961,3 @@ func sanitizeTelegramCommand(cmd string) string {
 	}
 	return result
 }
-
-var _ core.AudioSender = (*Platform)(nil)

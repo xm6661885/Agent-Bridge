@@ -45,8 +45,6 @@ type Agent struct {
 	allowedTools     []string
 	disallowedTools  []string
 	maxContextTokens int // optional: passed as --max-context-tokens when > 0
-	providers        []core.ProviderConfig
-	activeIdx        int // -1 = no provider set
 	sessionEnv       []string
 	routerURL        string   // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
 	routerAPIKey     string   // Claude Code Router API key (optional)
@@ -55,13 +53,10 @@ type Agent struct {
 
 	appendSystemPrompt string // Custom text appended to the system prompt (keeps Claude's default)
 
-	providerProxy *core.ProviderProxy // local proxy for third-party providers
-	proxyLocalURL string              // local URL of the proxy
-
 	// ccDataDir is injected by the agent-bridge host (see buildAgentOptions
 	// in cmd/agent-bridge/main.go). It locates the global directory where
 	// we write the shared agent-bridge system prompt file (issue #1376
-	// workaround for Windows 8192-byte cmdline limit). The file at
+	// keeps command lines short). The file at
 	// <ccDataDir>/agent-prompts/agent-bridge-system.md is written once per
 	// startup and shared across all sessions that don't need per-spawn
 	// customisation. Empty value falls back to os.TempDir.
@@ -227,7 +222,6 @@ func New(opts map[string]any) (core.Agent, error) {
 		disallowedTools:  disallowedTools,
 		maxContextTokens: maxContextTokens,
 		configEnv:        configEnv,
-		activeIdx:        -1,
 		routerURL:        routerURL,
 		routerAPIKey:     routerAPIKey,
 		ccDataDir:        ccDataDir,
@@ -300,7 +294,7 @@ func (a *Agent) SetModel(model string) {
 func (a *Agent) GetModel() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return core.GetProviderModel(a.providers, a.activeIdx, a.model)
+	return a.model
 }
 
 func (a *Agent) SetReasoningEffort(effort string) {
@@ -320,16 +314,7 @@ func (a *Agent) AvailableReasoningEfforts() []string {
 	return []string{"low", "medium", "high", "max"}
 }
 
-func (a *Agent) configuredModels() []core.ModelOption {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return core.GetProviderModels(a.providers, a.activeIdx)
-}
-
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
-	if models := a.configuredModels(); len(models) > 0 {
-		return models
-	}
 	if models := a.fetchModelsFromAPI(ctx); len(models) > 0 {
 		return models
 	}
@@ -343,24 +328,11 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 }
 
 func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
-	a.mu.Lock()
-	apiKey := ""
-	baseURL := ""
-	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
-		apiKey = a.providers[a.activeIdx].APIKey
-		baseURL = a.providers[a.activeIdx].BaseURL
-	}
-	a.mu.Unlock()
-
-	if apiKey == "" {
-		apiKey = os.Getenv("ANTHROPIC_API_KEY")
-	}
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		return nil
 	}
-	if baseURL == "" {
-		baseURL = os.Getenv("ANTHROPIC_BASE_URL")
-	}
+	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
@@ -466,20 +438,9 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	copy(pluginDirs, a.pluginDirs)
 	extraEnv := a.runtimeEnvLocked()
 
-	activeIdx := a.activeIdx
-	var activeProviderName string
-	if activeIdx >= 0 && activeIdx < len(a.providers) {
-		activeProviderName = a.providers[activeIdx].Name
-		if m := a.providers[activeIdx].Model; m != "" {
-			model = m
-		}
-	}
-	slog.Debug("claudecode: StartSession provider state",
-		"activeIdx", activeIdx,
-		"activeProvider", activeProviderName,
+	slog.Debug("claudecode: StartSession",
 		"model", model,
-		"sessionID", sessionID,
-		"providerCount", len(a.providers))
+		"sessionID", sessionID)
 	systemPrompt := a.systemPrompt
 	appendSystemPrompt := a.appendSystemPrompt
 	// When router_url is set, --verbose conflicts with --output-format stream-json
@@ -766,9 +727,8 @@ func (a *Agent) GetMode() string {
 // every claudecode field except mode/model — so cmd, allowed_tools,
 // and friends would only take effect on the project-level agent.
 //
-// Runtime-only state (providers, sessionEnv, providerProxy)
-// is intentionally omitted: providers are rewired separately by the engine
-// after construction; the rest is per-session and recomputed.
+// Runtime-only state (sessionEnv) is intentionally omitted: it is
+// per-session and recomputed.
 //
 // configEnv IS included because it comes from the static config file and must
 // propagate to every workspace agent. sessionEnv is excluded (runtime-only).
@@ -929,140 +889,11 @@ func claudeConfigHomeDir() string {
 	return filepath.Join(home, ".claude")
 }
 
-// ── ProviderSwitcher implementation ──────────────────────────
-
-func (a *Agent) SetProviders(providers []core.ProviderConfig) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.providers = providers
-}
-
-func (a *Agent) SetActiveProvider(name string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.stopProviderProxyLocked()
-	if name == "" {
-		a.activeIdx = -1
-		slog.Info("claudecode: provider cleared")
-		return true
-	}
-	for i, p := range a.providers {
-		if p.Name == name {
-			a.activeIdx = i
-			slog.Info("claudecode: provider switched", "provider", name)
-			return true
-		}
-	}
-	return false
-}
-
-func (a *Agent) GetActiveProvider() *core.ProviderConfig {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.activeIdx < 0 || a.activeIdx >= len(a.providers) {
-		return nil
-	}
-	p := a.providers[a.activeIdx]
-	return &p
-}
-
-func (a *Agent) ListProviders() []core.ProviderConfig {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	result := make([]core.ProviderConfig, len(a.providers))
-	copy(result, a.providers)
-	return result
-}
-
-// providerEnvLocked returns env vars for the active provider. Caller must hold mu.
-//
-// When a custom base_url is configured:
-//  1. We use ANTHROPIC_AUTH_TOKEN (Bearer) instead of ANTHROPIC_API_KEY
-//     (x-api-key). Claude Code validates API keys against api.anthropic.com
-//     which hangs for third-party endpoints; Bearer auth skips that check.
-//  2. If the provider sets thinking (e.g. "disabled"), a local reverse proxy
-//     rewrites the thinking parameter for compatibility with providers that
-//     don't support adaptive thinking.
-//
-// For env-only providers (Bedrock, Vertex, Foundry) that don't set base_url
-// but use CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY env vars, the thinking
-// rewrite proxy routes via ANTHROPIC_*_BASE_URL override env vars.
-func (a *Agent) providerEnvLocked() []string {
-	if a.activeIdx < 0 || a.activeIdx >= len(a.providers) {
-		a.stopProviderProxyLocked()
-		return nil
-	}
-	p := a.providers[a.activeIdx]
-	var env []string
-
-	if p.BaseURL != "" {
-		if p.Thinking != "" {
-			if err := a.ensureProviderProxyLocked(p.BaseURL, p.Thinking); err != nil {
-				slog.Error("providerproxy: failed to start", "error", err)
-				env = append(env, "ANTHROPIC_BASE_URL="+p.BaseURL)
-			} else {
-				env = append(env, "ANTHROPIC_BASE_URL="+a.proxyLocalURL)
-				env = append(env, "NO_PROXY=127.0.0.1")
-			}
-		} else {
-			a.stopProviderProxyLocked()
-			env = append(env, "ANTHROPIC_BASE_URL="+p.BaseURL)
-		}
-		if p.APIKey != "" {
-			env = append(env, "ANTHROPIC_AUTH_TOKEN="+p.APIKey)
-			env = append(env, "ANTHROPIC_API_KEY=")
-		}
-		if p.Model != "" {
-			env = append(env, "ANTHROPIC_MODEL="+p.Model)
-		}
-	} else {
-		// Check for env-only providers (Bedrock, Vertex, Foundry) that need thinking rewrite.
-		if p.Thinking != "" {
-			providerType := detectEnvOnlyProviderType(p.Env)
-			if providerType != "" {
-				targetURL := getDefaultEndpointForProviderType(providerType)
-				if targetURL != "" {
-					if err := a.ensureProviderProxyLocked(targetURL, p.Thinking); err != nil {
-						slog.Error("providerproxy: failed to start for "+providerType, "error", err)
-						a.stopProviderProxyLocked()
-					} else {
-						// Route the provider-specific requests through our proxy.
-						baseURLEnvVar := getBaseURLEnvVarForProviderType(providerType)
-						env = append(env, baseURLEnvVar+"="+a.proxyLocalURL)
-						env = append(env, "NO_PROXY=127.0.0.1")
-						slog.Info("claudecode: thinking rewrite proxy enabled for "+providerType,
-							"target", targetURL, "local", a.proxyLocalURL, "thinking", p.Thinking)
-					}
-				} else {
-					a.stopProviderProxyLocked()
-				}
-			} else {
-				a.stopProviderProxyLocked()
-			}
-		} else {
-			a.stopProviderProxyLocked()
-		}
-		if p.APIKey != "" {
-			env = append(env, "ANTHROPIC_API_KEY="+p.APIKey)
-		}
-	}
-
-	for k, v := range p.Env {
-		env = append(env, k+"="+v)
-	}
-	slog.Debug("claudecode: providerEnv",
-		"provider", p.Name,
-		"model", p.Model,
-		"env", core.RedactEnv(env))
-	return env
-}
-
 func (a *Agent) runtimeEnvLocked() []string {
-	// configEnv (from config.toml [env]) is lower priority than provider keys or
+	// configEnv (from config.toml [env]) is lower priority than
 	// session-injected vars, but must survive SetSessionEnv calls (which only
 	// overwrite sessionEnv). Prepend it so later entries win on conflict.
 	env := append([]string(nil), a.configEnv...)
-	env = append(env, a.providerEnvLocked()...)
 	env = append(env, a.sessionEnv...)
 
 	if a.routerURL != "" {
@@ -1098,81 +929,6 @@ func claudeEnvManagesProviderRouting(env []string) bool {
 		}
 	}
 	return false
-}
-
-func (a *Agent) ensureProviderProxyLocked(targetURL, thinkingOverride string) error {
-	if a.providerProxy != nil && a.proxyLocalURL != "" {
-		return nil
-	}
-	a.stopProviderProxyLocked()
-	proxy, localURL, err := core.NewProviderProxy(targetURL, thinkingOverride)
-	if err != nil {
-		return err
-	}
-	a.providerProxy = proxy
-	a.proxyLocalURL = localURL
-	return nil
-}
-
-func (a *Agent) stopProviderProxyLocked() {
-	if a.providerProxy != nil {
-		a.providerProxy.Close()
-		a.providerProxy = nil
-		a.proxyLocalURL = ""
-	}
-}
-
-// detectEnvOnlyProviderType checks if the provider uses Bedrock, Vertex, or Foundry
-// via environment variables (without base_url). Returns "bedrock", "vertex", "foundry",
-// or empty string if not detected.
-func detectEnvOnlyProviderType(env map[string]string) string {
-	if env == nil {
-		return ""
-	}
-	if env["CLAUDE_CODE_USE_BEDROCK"] == "1" {
-		return "bedrock"
-	}
-	if env["CLAUDE_CODE_USE_VERTEX"] == "1" {
-		return "vertex"
-	}
-	if env["CLAUDE_CODE_USE_FOUNDRY"] == "1" {
-		return "foundry"
-	}
-	return ""
-}
-
-// getDefaultEndpointForProviderType returns the default API endpoint for Bedrock/Vertex/Foundry.
-// Used as the proxy target when thinking rewrite is needed for env-only providers.
-func getDefaultEndpointForProviderType(providerType string) string {
-	switch providerType {
-	case "bedrock":
-		// Bedrock cross-region inference endpoint; works with AWS SDK auth.
-		// User can override region via AWS_REGION or CLOUD_ML_REGION env var.
-		return "https://bedrock-runtime.us-east-1.amazonaws.com"
-	case "vertex":
-		// Vertex AI endpoint; requires CLOUD_ML_REGION env var for region.
-		return "https://us-east1-aiplatform.googleapis.com"
-	case "foundry":
-		// Anthropic Foundry internal endpoint (rarely used externally).
-		return "https://api.anthropic.com"
-	default:
-		return ""
-	}
-}
-
-// getBaseURLEnvVarForProviderType returns the environment variable name that
-// Claude Code uses to override the base URL for Bedrock/Vertex/Foundry providers.
-func getBaseURLEnvVarForProviderType(providerType string) string {
-	switch providerType {
-	case "bedrock":
-		return "ANTHROPIC_BEDROCK_BASE_URL"
-	case "vertex":
-		return "ANTHROPIC_VERTEX_BASE_URL"
-	case "foundry":
-		return "ANTHROPIC_FOUNDRY_BASE_URL"
-	default:
-		return ""
-	}
 }
 
 // summarizeInput produces a short human-readable description of tool input.
@@ -1260,7 +1016,7 @@ func boolVal(m map[string]any, key string) bool {
 // encodeClaudeProjectKey converts an absolute path to Claude Code's project key format.
 // Claude Code encodes paths by:
 //  1. Replacing path separators (/ or \) with "-"
-//  2. Replacing colons (:) with "-" (Windows drive letters)
+//  2. Replacing colons (:) with "-"
 //  3. Replacing underscores (_) with "-"
 //  4. Replacing spaces and tildes (~) with "-" (common in macOS iCloud paths like
 //     "/Users/x/Library/Mobile Documents/com~apple~CloudDocs/...")
@@ -1288,8 +1044,7 @@ func encodeClaudeProjectKey(absPath string) string {
 
 // findProjectDir locates the Claude Code session directory for a given work dir.
 // Claude Code stores sessions at ~/.claude/projects/{projectKey}/ where projectKey
-// is derived from the absolute path. On Windows, the key format may vary (colon
-// handling, slash direction), so we try multiple key candidates and fall back to
+// is derived from the absolute path. The key format may vary between versions, so we try multiple key candidates and fall back to
 // scanning the projects directory.
 func findProjectDir(homeDir, absWorkDir string) string {
 	projectsBase := filepath.Join(homeDir, ".claude", "projects")
@@ -1303,7 +1058,7 @@ func findProjectDir(homeDir, absWorkDir string) string {
 		strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(absWorkDir),
 		strings.NewReplacer("/", "-", "\\", "-", ":", "-", "_", "-").Replace(absWorkDir),
 	}
-	// Also try with forward slashes (config might use forward slashes on Windows)
+	// Also try with forward slashes (normalized form)
 	fwd := strings.ReplaceAll(absWorkDir, "\\", "/")
 	candidates = append(candidates, strings.ReplaceAll(fwd, "/", "-"))
 
@@ -1331,7 +1086,7 @@ func findProjectDir(homeDir, absWorkDir string) string {
 		if entry.Name() == encodedWorkDir {
 			return filepath.Join(projectsBase, entry.Name())
 		}
-		// Case-insensitive match for Windows compatibility
+		// Case-insensitive match (case-insensitive filesystems)
 		if strings.EqualFold(entry.Name(), encodedWorkDir) {
 			return filepath.Join(projectsBase, entry.Name())
 		}

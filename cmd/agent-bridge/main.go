@@ -195,23 +195,15 @@ type initialModelRefreshStarter interface {
 	StartInitialModelRefresh()
 }
 
-type providerWiringResult struct {
-	explicitProviderRequested bool
-	activeProviderApplied     bool
-	canStartInitialRefresh    bool
-}
-
 var topLevelCommandHandlers = map[string]func([]string){
 	"config-example": func(_ []string) {
 		fmt.Print(agentbridge.ConfigExampleTOML)
 	},
 	"config":    runConfig,
-	"provider":  runProviderCommand,
 	"send":      runSend,
 	"sessions":  runSessions,
 	"agent-sid": runAgentSID,
 	"daemon":    runDaemon,
-	"feishu":    runFeishu,
 	"weixin":    runWeixin,
 	"web":       runWeb,
 }
@@ -334,8 +326,6 @@ func main() {
 			os.Exit(1)
 		}
 
-		providerWiring := wireAgentProviders(agent, proj.Agent)
-
 		var platforms []core.Platform
 		for _, pc := range proj.Platforms {
 			opts := make(map[string]any, len(pc.Options)+2)
@@ -355,7 +345,7 @@ func main() {
 		workDir, _ := proj.Agent.Options["work_dir"].(string)
 		projectState := core.NewProjectStateStore(projectStatePath(cfg.DataDir, proj.Name))
 		effectiveWorkDir := applyProjectStateOverride(proj.Name, agent, workDir, projectState)
-		startInitialRefreshIfReady(agent, providerWiring)
+		startInitialRefresh(agent)
 		sessionFile := sessionStorePath(cfg.DataDir, proj.Name, effectiveWorkDir)
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile)
@@ -462,7 +452,6 @@ func main() {
 				CleanupProgressOnComplete: cleanup,
 				CollapseToolMessages:      collapse,
 				Mode:                      mode,
-				CardMode:                  config.EffectiveCardMode(cfg, &proj),
 				ThinkingMessages:          tm,
 				ThinkingMaxLen:            tmlen,
 				ToolMaxLen:                toollen,
@@ -631,204 +620,7 @@ func main() {
 			engine.SetInjectSender(*proj.InjectSender)
 		}
 
-		// Wire speech-to-text if enabled
-		if cfg.Speech.Enabled {
-			speechCfg := core.SpeechCfg{
-				Enabled:  true,
-				Language: cfg.Speech.Language,
-			}
-			switch cfg.Speech.Provider {
-			case "groq":
-				apiKey := cfg.Speech.Groq.APIKey
-				model := cfg.Speech.Groq.Model
-				if model == "" {
-					model = "whisper-large-v3-turbo"
-				}
-				if apiKey != "" {
-					speechCfg.STT = core.NewOpenAIWhisper(apiKey, "https://api.groq.com/openai/v1", model)
-				} else {
-					slog.Warn("speech: groq provider enabled but api_key is empty")
-				}
-			case "qwen":
-				apiKey := cfg.Speech.Qwen.APIKey
-				baseURL := cfg.Speech.Qwen.BaseURL
-				model := cfg.Speech.Qwen.Model
-				if apiKey != "" {
-					speechCfg.STT = core.NewQwenASR(apiKey, baseURL, model)
-				} else {
-					slog.Warn("speech: qwen provider enabled but api_key is empty")
-				}
-			case "gemini":
-				apiKey := cfg.Speech.Gemini.APIKey
-				model := cfg.Speech.Gemini.Model
-				if apiKey != "" {
-					speechCfg.STT = core.NewGeminiSTT(apiKey, model)
-				} else {
-					slog.Warn("speech: gemini provider enabled but api_key is empty")
-				}
-			default: // "openai" or unspecified
-				apiKey := cfg.Speech.OpenAI.APIKey
-				baseURL := cfg.Speech.OpenAI.BaseURL
-				model := cfg.Speech.OpenAI.Model
-				if apiKey != "" {
-					speechCfg.STT = core.NewOpenAIWhisper(apiKey, baseURL, model)
-				} else {
-					slog.Warn("speech: openai provider enabled but api_key is empty")
-				}
-			}
-			if speechCfg.STT != nil {
-				engine.SetSpeechConfig(speechCfg)
-				slog.Info("speech: enabled", "provider", cfg.Speech.Provider)
-			}
-		}
-
-		// Wire text-to-speech if enabled
-		ttsEffective := config.ResolveTTSConfigForProject(cfg.TTS, proj.Name)
-		if ttsEffective.Enabled {
-			ttsCfg := &core.TTSCfg{
-				Enabled:      true,
-				Voice:        ttsEffective.Voice,
-				LanguageType: ttsEffective.LanguageType,
-				Speed:        ttsEffective.Speed,
-				MaxTextLen:   ttsEffective.MaxTextLen,
-			}
-			initMode := ttsEffective.TTSMode
-			switch initMode {
-			case "always", "voice_only":
-			case "":
-				initMode = "voice_only"
-			default:
-				slog.Warn("tts: invalid tts_mode in config, falling back to voice_only", "tts_mode", initMode)
-				initMode = "voice_only"
-			}
-			ttsCfg.SetTTSMode(initMode)
-			switch ttsEffective.Provider {
-			case "qwen":
-				apiKey := cfg.TTS.Qwen.APIKey
-				baseURL := cfg.TTS.Qwen.BaseURL
-				model := cfg.TTS.Qwen.Model
-				if apiKey != "" {
-					ttsCfg.TTS = core.NewQwenTTS(apiKey, baseURL, model, nil)
-					ttsCfg.Provider = "qwen"
-				} else {
-					slog.Warn("tts: qwen provider enabled but api_key is empty")
-				}
-			case "minimax":
-				apiKey := cfg.TTS.MiniMax.APIKey
-				baseURL := cfg.TTS.MiniMax.BaseURL
-				model := cfg.TTS.MiniMax.Model
-				if apiKey == "" {
-					localCfg, err := config.LoadMiniMaxLocalConfig(cfg.DataDir, cfg.TTS.MiniMax.ConfigFile)
-					if err != nil {
-						slog.Warn("tts: failed to load minimax local config", "error", err)
-					} else {
-						apiKey = localCfg.APIKey
-						if baseURL == "" {
-							if localCfg.BaseURL != "" {
-								baseURL = localCfg.BaseURL
-							} else if localCfg.APIHost != "" {
-								baseURL = localCfg.APIHost
-							}
-						}
-					}
-				}
-				if apiKey != "" {
-					ttsCfg.TTS = core.NewMiniMaxTTS(apiKey, baseURL, model, nil)
-					ttsCfg.Provider = "minimax"
-				} else {
-					slog.Warn("tts: minimax provider enabled but api_key is empty")
-				}
-			case "mimo":
-				apiKey := cfg.TTS.Mimo.APIKey
-				baseURL := cfg.TTS.Mimo.BaseURL
-				model := cfg.TTS.Mimo.Model
-				if apiKey != "" {
-					ttsCfg.TTS = core.NewMimoTTS(apiKey, baseURL, model, nil)
-					ttsCfg.Provider = "mimo"
-				} else {
-					slog.Warn("tts: mimo provider enabled but api_key is empty")
-				}
-			case "espeak":
-				voice := ttsEffective.Voice
-				if voice == "" {
-					voice = "zh" // default to Chinese
-				}
-				ttsCfg.TTS = core.NewEspeakTTS("", voice)
-				ttsCfg.Provider = "espeak"
-			case "pico":
-				voice := ttsEffective.Voice
-				if voice == "" {
-					voice = "zh-CN" // default to Chinese (Simplified)
-				}
-				ttsCfg.TTS = core.NewPicoTTS("", voice)
-				ttsCfg.Provider = "pico"
-			case "edge":
-				voice := ttsEffective.Voice
-				if voice == "" {
-					voice = "zh-CN-XiaoxiaoNeural" // default Chinese neural voice
-				}
-				ttsCfg.TTS = core.NewEdgeTTS(voice)
-				ttsCfg.Provider = "edge"
-			default: // "openai" or unspecified
-				apiKey := cfg.TTS.OpenAI.APIKey
-				baseURL := cfg.TTS.OpenAI.BaseURL
-				model := cfg.TTS.OpenAI.Model
-				if apiKey != "" {
-					ttsCfg.TTS = core.NewOpenAITTS(apiKey, baseURL, model, nil)
-					ttsCfg.Provider = "openai"
-				} else {
-					slog.Warn("tts: openai provider enabled but api_key is empty")
-				}
-			}
-			if ttsCfg.TTS != nil {
-				engine.SetTTSConfig(ttsCfg)
-				engine.SetTTSSaveFunc(func(mode string) error {
-					return config.SaveTTSMode(mode)
-				})
-				slog.Info("tts: enabled", "provider", ttsCfg.Provider, "voice", ttsCfg.Voice, "mode", initMode)
-			}
-		}
-
-		// Set up save callbacks for provider management
 		projName := proj.Name
-		engine.SetProviderSaveFunc(func(providerName string) error {
-			return config.SaveActiveProvider(projName, providerName)
-		})
-		engine.SetProviderAddSaveFunc(func(p core.ProviderConfig) error {
-			cp := config.ProviderConfig{
-				Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL,
-				Model: p.Model, Models: convertCoreModels(p.Models), Thinking: p.Thinking, Env: p.Env,
-			}
-			if p.CodexWireAPI != "" || len(p.CodexHTTPHeaders) > 0 {
-				cp.Codex = &config.CodexProviderConfig{
-					WireAPI: p.CodexWireAPI, HTTPHeaders: p.CodexHTTPHeaders,
-				}
-			}
-			return config.AddProviderToConfig(projName, cp)
-		})
-		engine.SetProviderRemoveSaveFunc(func(name string) error {
-			return config.RemoveProviderFromConfig(projName, name)
-		})
-		engine.SetProviderModelSaveFunc(func(providerName, model string) error {
-			return config.SaveProviderModel(projName, providerName, model)
-		})
-		engine.SetProviderRefsSaveFunc(func(refs []string) error {
-			return config.SaveProviderRefs(projName, refs)
-		})
-		engine.SetListGlobalProvidersFunc(func(agentType string) ([]core.ProviderConfig, error) {
-			globals, err := config.ListGlobalProviders()
-			if err != nil {
-				return nil, err
-			}
-			var result []core.ProviderConfig
-			for _, g := range globals {
-				if len(g.AgentTypes) > 0 && !containsString(g.AgentTypes, agentType) {
-					continue
-				}
-				result = append(result, configProviderToCore(g.ResolveForAgent(agentType)))
-			}
-			return result, nil
-		})
 		engine.SetModelSaveFunc(func(model string) error {
 			return config.SaveAgentModel(projName, model)
 		})
@@ -939,30 +731,6 @@ func main() {
 		if bridgeSrv != nil {
 			mgmtSrv.SetBridgeServer(bridgeSrv)
 		}
-		mgmtSrv.SetSetupFeishuSave(func(req core.FeishuSetupSaveRequest) error {
-			platType := req.PlatformType
-			if platType == "" {
-				platType = "feishu"
-			}
-			_, err := config.EnsureProjectWithFeishuPlatform(config.EnsureProjectWithFeishuOptions{
-				ProjectName:  req.ProjectName,
-				PlatformType: platType,
-				WorkDir:      req.WorkDir,
-				AgentType:    req.AgentType,
-			})
-			if err != nil {
-				return fmt.Errorf("ensure project: %w", err)
-			}
-			_, err = config.SaveFeishuPlatformCredentials(config.FeishuCredentialUpdateOptions{
-				ProjectName:       req.ProjectName,
-				PlatformType:      platType,
-				AppID:             req.AppID,
-				AppSecret:         req.AppSecret,
-				OwnerOpenID:       req.OwnerOpenID,
-				SetAllowFromEmpty: true,
-			})
-			return err
-		})
 		mgmtSrv.SetSetupWeixinSave(func(req core.WeixinSetupSaveRequest) error {
 			_, err := config.EnsureProjectWithWeixinPlatform(config.EnsureProjectWithWeixinOptions{
 				ProjectName: req.ProjectName,
@@ -1007,7 +775,6 @@ func main() {
 			})
 		})
 		mgmtSrv.SetGetProjectConfig(config.GetProjectConfigDetails)
-		mgmtSrv.SetSaveProviderRefs(config.SaveProviderRefs)
 		mgmtSrv.SetConfigFilePath(configPath)
 		mgmtSrv.SetGetGlobalSettings(config.GetGlobalSettings)
 		mgmtSrv.SetSaveGlobalSettings(func(updates map[string]any) error {
@@ -1059,26 +826,6 @@ func main() {
 				u.RateLimitWindow = &iv
 			}
 			return config.SaveGlobalSettings(u)
-		})
-		mgmtSrv.SetListGlobalProviders(func() ([]core.GlobalProviderInfo, error) {
-			providers, err := config.ListGlobalProviders()
-			if err != nil {
-				return nil, err
-			}
-			out := make([]core.GlobalProviderInfo, len(providers))
-			for i, p := range providers {
-				out[i] = configProviderToGlobal(p)
-			}
-			return out, nil
-		})
-		mgmtSrv.SetAddGlobalProvider(func(info core.GlobalProviderInfo) error {
-			return config.AddGlobalProvider(globalProviderToConfig(info))
-		})
-		mgmtSrv.SetUpdateGlobalProvider(func(name string, info core.GlobalProviderInfo) error {
-			return config.UpdateGlobalProvider(name, globalProviderToConfig(info))
-		})
-		mgmtSrv.SetRemoveGlobalProvider(func(name string) error {
-			return config.RemoveGlobalProvider(name)
 		})
 		mgmtSrv.Start()
 	}
@@ -1372,15 +1119,14 @@ mode = "default"
 
 # --- Choose at least one platform below ---
 
-# Feishu / Lark (WebSocket, no public IP needed)
+# Telegram
 [[projects.platforms]]
-type = "feishu"
+type = "telegram"
 
 [projects.platforms.options]
-app_id = "your-feishu-app-id"
-app_secret = "your-feishu-app-secret"
+token = "your-telegram-bot-token"
 
-# For Telegram and QQ platform examples
+# For Weixin and QQ platform examples
 # see: config.example.toml
 `
 	return os.WriteFile(path, []byte(tmpl), 0o644)
@@ -1396,7 +1142,7 @@ func printUsage() {
 
   Bridge your messaging platforms to local AI coding agents.
   Supports: Claude Code and Codex
-  Platforms: Weixin, Feishu, Telegram, QQ (OneBot and Official Bot)
+  Platforms: Weixin, Telegram, QQ (OneBot)
 
 Usage:
   agent-bridge [flags]
@@ -1409,7 +1155,7 @@ Flags:
   --help             Show this help message
 
 Commands:
-  daemon             Manage agent-bridge as a background service (systemd/launchd/schtasks)
+  daemon             Manage agent-bridge as a background service (systemd/launchd)
     install          Install and start the daemon service
     uninstall        Remove the daemon service
     start            Start the daemon
@@ -1418,8 +1164,8 @@ Commands:
     status           Show daemon status
     logs             View daemon logs (-f to follow, -n N for last N lines)
 
-  send               Send attachments or TTS voice to an active session
-                     (--image|--file|--audio|--video <path>, --tts <text>,
+  send               Send attachments to an active session
+                     (--image|--file|--audio|--video <path>,
                       -m <caption> with image/file only, -p <project>, -s <session>)
 
 
@@ -1428,16 +1174,6 @@ Commands:
     show <id>        Show session messages (-n N for last N)
 
   agent-sid          Print the agent session ID for the current session
-
-  provider           Manage API providers for projects
-    add              Add a provider (--project, --name, --api-key, ...)
-    list             List providers (--project)
-    remove           Remove a provider (--project, --name)
-
-  feishu             Setup Feishu/Lark bot credentials
-    setup            Smart setup (QR create or bind when --app is provided)
-    new              Force QR onboarding to create a new bot
-    bind             Bind existing app_id/app_secret
 
   weixin             Setup Weixin personal (ilink) via QR or token
     setup            QR login, or bind when --token is provided
@@ -1457,7 +1193,6 @@ Examples:
   agent-bridge daemon install           Install as a system service
   agent-bridge daemon logs -f           Follow daemon logs
   agent-bridge send --file report.pdf   Send a file to the active session
-  agent-bridge feishu setup             Setup Feishu/Lark bot credentials
   agent-bridge weixin setup             Setup Weixin (ilink) with QR or --token
   agent-bridge config format            Format the config file
   agent-bridge config example > c.toml  Save example config to a file
@@ -1486,7 +1221,7 @@ func setupLogger(level string, w io.Writer) {
 }
 
 // reloadConfig re-reads config.toml and applies hot-reloadable settings
-// (display, providers, commands) to the given engine.
+// (display, commands) to the given engine.
 func reloadConfig(configPath, projName string, engine *core.Engine) (*core.ConfigReloadResult, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -1520,7 +1255,6 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 		CleanupProgressOnComplete: cleanup,
 		CollapseToolMessages:      collapse,
 		Mode:                      mode,
-		CardMode:                  config.EffectiveCardMode(cfg, proj),
 		ThinkingMessages:          tm,
 		ThinkingMaxLen:            tmlen,
 		ToolMaxLen:                toollen,
@@ -1591,20 +1325,6 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	// Reload filter_external_sessions
 	engine.SetFilterExternalSessions(proj.FilterExternalSessions != nil && *proj.FilterExternalSessions)
 
-	// Reload providers
-	if ps, ok := engine.GetAgent().(core.ProviderSwitcher); ok {
-		providers := make([]core.ProviderConfig, len(proj.Agent.Providers))
-		for i, p := range proj.Agent.Providers {
-			providers[i] = configProviderToCore(p)
-		}
-		ps.SetProviders(providers)
-		result.ProvidersUpdated = len(providers)
-
-		if active, _ := proj.Agent.Options["provider"].(string); active != "" {
-			ps.SetActiveProvider(active)
-		}
-	}
-
 	// Reload custom commands
 	engine.ClearCommands("config")
 	for _, c := range cfg.Commands {
@@ -1671,30 +1391,6 @@ func buildUserRoleManager(uc *config.UsersConfig) *core.UserRoleManager {
 	return urm
 }
 
-func configProviderToCore(p config.ProviderConfig) core.ProviderConfig {
-	c := core.ProviderConfig{
-		Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL,
-		Model: p.Model, Models: convertProviderModels(p.Models),
-		Thinking: p.Thinking, Env: p.Env,
-	}
-	if p.Codex != nil {
-		c.CodexWireAPI = p.Codex.WireAPI
-		c.CodexHTTPHeaders = p.Codex.HTTPHeaders
-	}
-	return c
-}
-
-func convertProviderModels(ms []config.ProviderModelConfig) []core.ModelOption {
-	if len(ms) == 0 {
-		return nil
-	}
-	opts := make([]core.ModelOption, len(ms))
-	for i, m := range ms {
-		opts[i] = core.ModelOption{Name: m.Model, Alias: m.Alias}
-	}
-	return opts
-}
-
 func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any {
 	opts := make(map[string]any, len(proj.Agent.Options)+2)
 	for k, v := range proj.Agent.Options {
@@ -1705,117 +1401,10 @@ func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any
 	return opts
 }
 
-func wireAgentProviders(agent core.Agent, agentCfg config.AgentConfig) providerWiringResult {
-	result := providerWiringResult{canStartInitialRefresh: true}
-	active, _ := agentCfg.Options["provider"].(string)
-	result.explicitProviderRequested = active != ""
-
-	ps, ok := agent.(core.ProviderSwitcher)
-	if !ok || len(agentCfg.Providers) == 0 {
-		return result
-	}
-
-	providers := make([]core.ProviderConfig, len(agentCfg.Providers))
-	for i, p := range agentCfg.Providers {
-		providers[i] = configProviderToCore(p)
-	}
-	ps.SetProviders(providers)
-	if result.explicitProviderRequested {
-		result.activeProviderApplied = ps.SetActiveProvider(active)
-		result.canStartInitialRefresh = result.activeProviderApplied
-	}
-	return result
-}
-
-func startInitialRefreshIfReady(agent core.Agent, result providerWiringResult) {
-	if !result.canStartInitialRefresh {
-		return
-	}
+func startInitialRefresh(agent core.Agent) {
 	if starter, ok := agent.(initialModelRefreshStarter); ok {
 		starter.StartInitialModelRefresh()
 	}
-}
-
-func configProviderToGlobal(p config.ProviderConfig) core.GlobalProviderInfo {
-	info := core.GlobalProviderInfo{
-		Name:        p.Name,
-		APIKey:      p.APIKey,
-		BaseURL:     p.BaseURL,
-		Model:       p.Model,
-		Thinking:    p.Thinking,
-		Env:         p.Env,
-		AgentTypes:  p.AgentTypes,
-		Endpoints:   p.Endpoints,
-		AgentModels: p.AgentModels,
-	}
-	for _, m := range p.Models {
-		info.Models = append(info.Models, struct {
-			Model string `json:"model"`
-			Alias string `json:"alias,omitempty"`
-		}{Model: m.Model, Alias: m.Alias})
-	}
-	if len(p.AgentModelLists) > 0 {
-		info.AgentModelLists = make(map[string][]core.GlobalModelEntry, len(p.AgentModelLists))
-		for at, ml := range p.AgentModelLists {
-			entries := make([]core.GlobalModelEntry, len(ml))
-			for i, m := range ml {
-				entries[i] = core.GlobalModelEntry{Model: m.Model, Alias: m.Alias}
-			}
-			info.AgentModelLists[at] = entries
-		}
-	}
-	if p.Codex != nil {
-		info.Codex = &core.GlobalCodexConfig{
-			WireAPI:     p.Codex.WireAPI,
-			HTTPHeaders: p.Codex.HTTPHeaders,
-		}
-	}
-	return info
-}
-
-func globalProviderToConfig(info core.GlobalProviderInfo) config.ProviderConfig {
-	p := config.ProviderConfig{
-		Name:        info.Name,
-		APIKey:      info.APIKey,
-		BaseURL:     info.BaseURL,
-		Model:       info.Model,
-		Thinking:    info.Thinking,
-		Env:         info.Env,
-		AgentTypes:  info.AgentTypes,
-		Endpoints:   info.Endpoints,
-		AgentModels: info.AgentModels,
-	}
-	for _, m := range info.Models {
-		p.Models = append(p.Models, config.ProviderModelConfig{Model: m.Model, Alias: m.Alias})
-	}
-	if len(info.AgentModelLists) > 0 {
-		p.AgentModelLists = make(map[string][]config.ProviderModelConfig, len(info.AgentModelLists))
-		for at, ml := range info.AgentModelLists {
-			entries := make([]config.ProviderModelConfig, len(ml))
-			for i, m := range ml {
-				entries[i] = config.ProviderModelConfig{Model: m.Model, Alias: m.Alias}
-			}
-			p.AgentModelLists[at] = entries
-		}
-	}
-	if info.Codex != nil {
-		p.Codex = &config.CodexProviderConfig{
-			WireAPI:     info.Codex.WireAPI,
-			HTTPHeaders: info.Codex.HTTPHeaders,
-		}
-	}
-	return p
-}
-
-func convertCoreModels(ms []core.ModelOption) []config.ProviderModelConfig {
-	if len(ms) == 0 {
-		return nil
-	}
-	out := make([]config.ProviderModelConfig, len(ms))
-	for i, m := range ms {
-		out[i] = config.ProviderModelConfig{Model: m.Name, Alias: m.Alias}
-	}
-	return out
 }
 
 func derefInt(v *int) int {

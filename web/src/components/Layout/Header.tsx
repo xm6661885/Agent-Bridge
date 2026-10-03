@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
 import {
   RefreshCw, Sun, Moon, Monitor, LogOut, ChevronDown,
@@ -8,7 +7,6 @@ import { useThemeStore } from '@/store/theme';
 import { useAuthStore } from '@/store/auth';
 
 export default function Header() {
-  const { t } = useTranslation();
   const { theme, setTheme } = useThemeStore();
   const logout = useAuthStore((s) => s.logout);
   const [spinning, setSpinning] = useState(false);
@@ -37,7 +35,7 @@ export default function Header() {
         'bg-white/70 backdrop-blur-xl dark:bg-[rgba(28,19,21,0.72)]',
       )}
     >
-      <button type="button" onClick={handleRefresh} className={btnCls} aria-label={t('common.refresh')}>
+      <button type="button" onClick={handleRefresh} className={btnCls} aria-label={"Refresh"}>
         <RefreshCw size={16} className={spinning ? 'animate-spin' : ''} />
       </button>
 
@@ -54,7 +52,7 @@ export default function Header() {
           'p-2 rounded-lg transition-all duration-200',
           'text-gray-400 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400',
         )}
-        aria-label={t('login.logout')}
+        aria-label={"Log out"}
       >
         <LogOut size={16} />
       </button>

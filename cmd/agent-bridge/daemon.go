@@ -465,6 +465,5 @@ Logs flags:
 Supported platforms:
   Linux (root)     - systemd system service (/etc/systemd/system/)
   Linux (non-root) - systemd user service (~/.config/systemd/user/)
-  macOS            - launchd LaunchAgent
-  Windows          - Task Scheduler task (schtasks)`)
+  macOS            - launchd LaunchAgent`)
 }

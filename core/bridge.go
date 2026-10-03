@@ -923,12 +923,18 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 		})
 	}
 
+	// Inbound audio is forwarded to the agent as a regular file attachment.
 	if m.Audio != nil {
 		if data, err := base64.StdEncoding.DecodeString(m.Audio.Data); err == nil {
-			msg.Audio = &AudioAttachment{
-				MimeType: m.Audio.MimeType, Data: data,
-				Format: m.Audio.Format, Duration: m.Audio.Duration,
+			format := strings.TrimSpace(m.Audio.Format)
+			if format == "" {
+				format = "audio"
 			}
+			msg.Files = append(msg.Files, FileAttachment{
+				MimeType: m.Audio.MimeType, Data: data, FileName: "voice." + format,
+			})
+		} else {
+			slog.Debug("bridge: invalid audio base64", "error", err)
 		}
 	}
 

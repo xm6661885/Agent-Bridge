@@ -16,7 +16,7 @@ func TestParseSessionKey(t *testing.T) {
 		wantPlatform string
 		wantGroup    string
 	}{
-		{"feishu:oc_xxx:ou_yyy", "feishu", "oc_xxx:ou_yyy"},
+		{"telegram:oc_xxx:ou_yyy", "telegram", "oc_xxx:ou_yyy"},
 		{"telegram:123:456", "telegram", "123:456"},
 		{"discord:guild123", "discord", "guild123"},
 		{"nocolon", "nocolon", ""},
@@ -60,10 +60,10 @@ func TestLoadAllSessions(t *testing.T) {
 			},
 		},
 		UserSessions: map[string][]string{
-			"feishu:oc_test:ou_user1": {"s1"},
+			"telegram:oc_test:ou_user1": {"s1"},
 		},
 		UserMeta: map[string]*userMetaData{
-			"feishu:oc_test:ou_user1": {UserName: "Alice", ChatName: "Test Group"},
+			"telegram:oc_test:ou_user1": {UserName: "Alice", ChatName: "Test Group"},
 		},
 	}
 
@@ -137,8 +137,8 @@ func TestLoadAllSessions(t *testing.T) {
 	if projectARecord == nil {
 		t.Fatal("project_a:s1 not found")
 	}
-	if projectARecord.Platform != "feishu" {
-		t.Errorf("project_a Platform = %q, want %q", projectARecord.Platform, "feishu")
+	if projectARecord.Platform != "telegram" {
+		t.Errorf("project_a Platform = %q, want %q", projectARecord.Platform, "telegram")
 	}
 	if projectARecord.Messages != 2 {
 		t.Errorf("project_a Messages = %d, want 2", projectARecord.Messages)

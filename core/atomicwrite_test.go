@@ -3,7 +3,6 @@ package core
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -43,9 +42,6 @@ func TestAtomicWriteFile_Overwrite(t *testing.T) {
 }
 
 func TestAtomicWriteFile_Permissions(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix file permissions not supported on Windows")
-	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 

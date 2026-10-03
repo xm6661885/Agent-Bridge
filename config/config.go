@@ -1,14 +1,12 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,14 +26,11 @@ type Config struct {
 	// Quiet is legacy: when true and [display] does not set thinking_messages / tool_messages,
 	// engines behave as if those flags were false. Per-project quiet overrides when set.
 	Quiet             *bool                   `toml:"quiet,omitempty"`
-	Providers         []ProviderConfig        `toml:"providers"` // global shared providers
 	Projects          []ProjectConfig         `toml:"projects"`
 	Commands          []CommandConfig         `toml:"commands"`     // global custom slash commands
 	Aliases           []AliasConfig           `toml:"aliases"`      // global command aliases
 	BannedWords       []string                `toml:"banned_words"` // messages containing any of these words are blocked
 	Log               LogConfig               `toml:"log"`
-	Speech            SpeechConfig            `toml:"speech"`
-	TTS               TTSConfig               `toml:"tts"`
 	Display           DisplayConfig           `toml:"display"`
 	StreamPreview     StreamPreviewConfig     `toml:"stream_preview"`      // real-time streaming preview
 	InstantReply      InstantReplyConfig      `toml:"instant_reply"`       // immediate confirmation reply
@@ -49,9 +44,8 @@ type Config struct {
 	IdleTimeoutMins   *int                    `toml:"idle_timeout_mins,omitempty"`  // max minutes between consecutive agent events; 0 = no timeout; default 120
 	MaxTurnTimeMins   *int                    `toml:"max_turn_time_mins,omitempty"` // absolute wall-clock cap per turn in minutes; 0 = disabled (default)
 	// Shell overrides the default shell used for /shell commands,
-	// hooks, and webhook exec. On Unix the default is "sh"; on Windows it is
-	// "powershell.exe". Set to an absolute path (e.g. "/bin/zsh") to use a
-	// different shell. Supported: sh, bash, zsh, fish, cmd, powershell, pwsh.
+	// hooks, and webhook exec. The default is "sh". Set to an absolute path (e.g. "/bin/zsh") to use a
+	// different shell. Supported: POSIX-style shells (sh, bash, zsh, fish).
 	Shell string `toml:"shell,omitempty"`
 	// ShellProfile is prepended to every shell command before execution. Useful
 	// for sourcing shell profiles so that user-defined functions and aliases are
@@ -118,7 +112,6 @@ type DisplayConfig struct {
 	CleanupProgressOnComplete *bool   `toml:"cleanup_progress_on_complete"` // delete thinking/tools and recovered diagnostics; default false
 	CollapseToolMessages      *bool   `toml:"collapse_tool_messages"`       // show only the current tool's activity label, without inputs/results; default false
 	Mode                      *string `toml:"mode"`                         // "full" (default), "compact", or "quiet"
-	CardMode                  *string `toml:"card_mode"`                    // "legacy" (default) or "rich" (Card 2.0 Feishu)
 	ThinkingMessages          *bool   `toml:"thinking_messages"`            // whether thinking messages are shown; default true
 	ThinkingMaxLen            *int    `toml:"thinking_max_len"`             // max chars for thinking messages; 0 = no truncation; default 300
 	ToolMaxLen                *int    `toml:"tool_max_len"`                 // max chars for tool use messages; 0 = no truncation; default 500
@@ -132,7 +125,7 @@ type DisplayConfig struct {
 // StreamPreviewConfig controls real-time streaming preview in IM.
 type StreamPreviewConfig struct {
 	Enabled           *bool    `toml:"enabled"`                      // default true
-	DisabledPlatforms []string `toml:"disabled_platforms,omitempty"` // platforms where preview is disabled (e.g. ["feishu"])
+	DisabledPlatforms []string `toml:"disabled_platforms,omitempty"` // platforms where preview is disabled (e.g. ["telegram"])
 	IntervalMs        *int     `toml:"interval_ms"`                  // min ms between updates; default 1500
 	MinDeltaChars     *int     `toml:"min_delta_chars"`              // min new chars before update; default 30
 	MaxChars          *int     `toml:"max_chars"`                    // max preview length; default 2000
@@ -143,7 +136,7 @@ type StreamPreviewConfig struct {
 // that their message was received (e.g. "Thinking...").
 type InstantReplyConfig struct {
 	Enabled *bool  `toml:"enabled"` // default false
-	Content string `toml:"content"` // custom reply text; empty = use i18n default ("Processing...")
+	Content string `toml:"content"` // custom reply text; empty = use default ("Processing...")
 }
 
 // RateLimitConfig controls per-session message rate limiting.
@@ -177,164 +170,6 @@ type RoleConfig struct {
 	UserIDs          []string         `toml:"user_ids"`
 	DisabledCommands []string         `toml:"disabled_commands,omitempty"`
 	RateLimit        *RateLimitConfig `toml:"rate_limit,omitempty"` // nil = inherit global
-}
-
-// SpeechConfig configures speech-to-text for voice messages.
-type SpeechConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	Provider string `toml:"provider"` // "openai" | "groq" | "qwen" | "gemini"
-	Language string `toml:"language"` // e.g. "zh", "en"; empty = auto-detect
-	OpenAI   struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
-	} `toml:"openai"`
-	Groq struct {
-		APIKey string `toml:"api_key"`
-		Model  string `toml:"model"`
-	} `toml:"groq"`
-	Qwen struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
-	} `toml:"qwen"`
-	Gemini struct {
-		APIKey string `toml:"api_key"`
-		Model  string `toml:"model"`
-	} `toml:"gemini"`
-}
-
-// TTSConfig configures text-to-speech output (mirrors SpeechConfig style).
-type TTSConfig struct {
-	Enabled      bool                      `toml:"enabled"`
-	Provider     string                    `toml:"provider"`      // "qwen" | "openai" | "minimax" | "mimo" | "espeak" | "pico" | "edge"
-	Voice        string                    `toml:"voice"`         // default voice name (for edge: "zh-CN-XiaoxiaoNeural"; for pico: "zh-CN"; for espeak: "zh"; for mimo: "mimo_default" / "冰糖" / "Mia" …)
-	VoiceID      string                    `toml:"voice_id"`      // alias for voice; useful for MiniMax voice IDs
-	Speed        float64                   `toml:"speed"`         // optional speaking speed multiplier; 0 = provider default
-	LanguageType string                    `toml:"language_type"` // optional provider-specific language hint
-	TTSMode      string                    `toml:"tts_mode"`      // "voice_only" (default) | "always"
-	MaxTextLen   int                       `toml:"max_text_len"`  // max rune count before skipping TTS; 0 = no limit
-	Agents       map[string]TTSAgentConfig `toml:"agents"`        // per-project/agent voice overrides keyed by [[projects]].name
-	OpenAI       struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
-	} `toml:"openai"`
-	Qwen struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
-	} `toml:"qwen"`
-	MiniMax struct {
-		APIKey     string `toml:"api_key"`
-		BaseURL    string `toml:"base_url"`
-		Model      string `toml:"model"`
-		ConfigFile string `toml:"config_file"` // optional JSON auth file; default data_dir/config/minimax.json when api_key is empty
-	} `toml:"minimax"`
-	Mimo struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
-	} `toml:"mimo"`
-}
-
-// TTSAgentConfig overrides global [tts] synthesis parameters for one project.
-// Keys are project names, which map naturally to agent-bridge's agent workspaces
-// (for example assistant, reviewer).
-type TTSAgentConfig struct {
-	Provider     string  `toml:"provider,omitempty"`
-	Voice        string  `toml:"voice,omitempty"`
-	VoiceID      string  `toml:"voice_id,omitempty"`
-	Speed        float64 `toml:"speed,omitempty"`
-	LanguageType string  `toml:"language_type,omitempty"`
-	MaxTextLen   *int    `toml:"max_text_len,omitempty"`
-}
-
-// ResolvedTTSConfig is the effective TTS config for a single project after
-// applying [tts.agents.<project>] overrides.
-type ResolvedTTSConfig struct {
-	Enabled      bool
-	Provider     string
-	Voice        string
-	Speed        float64
-	LanguageType string
-	TTSMode      string
-	MaxTextLen   int
-}
-
-// ResolveTTSConfigForProject returns the effective TTS settings for projectName.
-// Legacy [tts].voice remains supported; [tts].voice_id is treated as an alias
-// and takes precedence when both are set.
-func ResolveTTSConfigForProject(tts TTSConfig, projectName string) ResolvedTTSConfig {
-	res := ResolvedTTSConfig{
-		Enabled:      tts.Enabled,
-		Provider:     strings.TrimSpace(tts.Provider),
-		Voice:        firstNonEmpty(tts.VoiceID, tts.Voice),
-		Speed:        tts.Speed,
-		LanguageType: tts.LanguageType,
-		TTSMode:      tts.TTSMode,
-		MaxTextLen:   tts.MaxTextLen,
-	}
-	if tts.Agents == nil {
-		return res
-	}
-	agent, ok := tts.Agents[projectName]
-	if !ok {
-		return res
-	}
-	if v := strings.TrimSpace(agent.Provider); v != "" {
-		res.Provider = v
-	}
-	if v := firstNonEmpty(agent.VoiceID, agent.Voice); v != "" {
-		res.Voice = v
-	}
-	if agent.Speed > 0 {
-		res.Speed = agent.Speed
-	}
-	if v := strings.TrimSpace(agent.LanguageType); v != "" {
-		res.LanguageType = v
-	}
-	if agent.MaxTextLen != nil {
-		res.MaxTextLen = *agent.MaxTextLen
-	}
-	return res
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
-// MiniMaxLocalConfig is the JSON shape used by Agent Studio / MiniMax skills.
-type MiniMaxLocalConfig struct {
-	APIKey  string `json:"api_key"`
-	APIHost string `json:"api_host"`
-	BaseURL string `json:"base_url"`
-}
-
-// LoadMiniMaxLocalConfig reads a MiniMax JSON config without exposing secrets.
-// It returns an empty config when the file does not exist.
-func LoadMiniMaxLocalConfig(dataDir, configFile string) (MiniMaxLocalConfig, error) {
-	if strings.TrimSpace(configFile) == "" {
-		configFile = filepath.Join(dataDir, "config", "minimax.json")
-	}
-	configFile = expandUserPath(configFile)
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return MiniMaxLocalConfig{}, nil
-		}
-		return MiniMaxLocalConfig{}, fmt.Errorf("read minimax config: %w", err)
-	}
-	var cfg MiniMaxLocalConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return MiniMaxLocalConfig{}, fmt.Errorf("parse minimax config: %w", err)
-	}
-	return cfg, nil
 }
 
 // AutoCompressConfig controls automatic context compression for a project.
@@ -433,40 +268,8 @@ type ProjectConfig struct {
 }
 
 type AgentConfig struct {
-	Type         string           `toml:"type"`
-	Options      map[string]any   `toml:"options"`
-	ProviderRefs []string         `toml:"provider_refs,omitempty"` // references to global [[providers]] by name
-	Providers    []ProviderConfig `toml:"providers"`
-}
-
-// ProviderModelConfig defines a selectable model entry for a provider,
-// with an optional short alias used by the /model command.
-type ProviderModelConfig struct {
-	Model string `toml:"model"`
-	Alias string `toml:"alias,omitempty"`
-}
-
-type ProviderConfig struct {
-	Name            string                           `toml:"name"`
-	APIKey          string                           `toml:"api_key"`
-	BaseURL         string                           `toml:"base_url,omitempty"`
-	Model           string                           `toml:"model,omitempty"`
-	Models          []ProviderModelConfig            `toml:"models,omitempty"`
-	Thinking        string                           `toml:"thinking,omitempty"`
-	Env             map[string]string                `toml:"env,omitempty"`
-	AgentTypes      []string                         `toml:"agent_types,omitempty"`       // optional: restrict to specific agent types (e.g. ["claudecode", "codex"])
-	Endpoints       map[string]string                `toml:"endpoints,omitempty"`         // per-agent-type base URL overrides (e.g. codex = "https://x/v1")
-	AgentModels     map[string]string                `toml:"agent_models,omitempty"`      // per-agent-type default model (e.g. codex = "openai/gpt-5.3-codex")
-	AgentModelLists map[string][]ProviderModelConfig `toml:"agent_model_lists,omitempty"` // per-agent-type model lists (overrides Models when matched)
-	Codex           *CodexProviderConfig             `toml:"codex,omitempty"`             // Codex-specific provider settings
-}
-
-// CodexProviderConfig holds Codex CLI-specific provider fields
-// that map to [model_providers.<name>] in Codex's own config.toml.
-type CodexProviderConfig struct {
-	EnvKey      string            `toml:"env_key,omitempty" json:"env_key,omitempty"`
-	WireAPI     string            `toml:"wire_api,omitempty" json:"wire_api,omitempty"`
-	HTTPHeaders map[string]string `toml:"http_headers,omitempty" json:"http_headers,omitempty"`
+	Type    string         `toml:"type"`
+	Options map[string]any `toml:"options"`
 }
 
 type PlatformConfig struct {
@@ -493,7 +296,7 @@ type LogConfig struct {
 	Level string `toml:"level"`
 }
 
-// load parses, env-resolves, and wires providers in the config file but does
+// load parses and env-resolves the config file but does
 // NOT validate — callers must call validate() or validatePermissive() themselves.
 func load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -516,7 +319,6 @@ func load(path string) (*Config, error) {
 	if cfg.AttachmentSend == "" {
 		cfg.AttachmentSend = "on"
 	}
-	cfg.ResolveProviderRefs()
 	return cfg, nil
 }
 
@@ -840,7 +642,7 @@ func EffectiveProgressDisplay(cfg *Config, proj *ProjectConfig) (cleanup, collap
 
 // EffectiveShell returns the shell binary, flag, and init command for the project.
 // Resolution: per-project > global > platform default.
-// The flag is auto-detected: "/C" for cmd, "-Command" for powershell/pwsh, "-c" for everything else.
+// The flag is always "-c".
 func EffectiveShell(cfg *Config, proj *ProjectConfig) (shell, flag, shellProfile string) {
 	s := ""
 	p := ""
@@ -855,40 +657,9 @@ func EffectiveShell(cfg *Config, proj *ProjectConfig) (shell, flag, shellProfile
 		p = cfg.ShellProfile
 	}
 	if s == "" {
-		if runtime.GOOS == "windows" {
-			return "powershell.exe", "-Command", p
-		}
 		return "sh", "-c", p
 	}
-	base := strings.ToLower(filepath.Base(s))
-	switch {
-	case base == "cmd" || base == "cmd.exe":
-		return s, "/C", p
-	case strings.HasPrefix(base, "powershell") || strings.HasPrefix(base, "pwsh"):
-		return s, "-Command", p
-	default:
-		return s, "-c", p
-	}
-}
-
-// EffectiveCardMode returns the card rendering mode for the project: "rich" (Feishu Card 2.0)
-// or "legacy" (default plain messages). Per-project overrides global.
-func EffectiveCardMode(cfg *Config, proj *ProjectConfig) string {
-	var projDisp *DisplayConfig
-	if proj != nil {
-		projDisp = proj.Display
-	}
-	if projDisp != nil && projDisp.CardMode != nil {
-		if m := strings.ToLower(strings.TrimSpace(*projDisp.CardMode)); m == "rich" || m == "legacy" {
-			return m
-		}
-	}
-	if cfg.Display.CardMode != nil {
-		if m := strings.ToLower(strings.TrimSpace(*cfg.Display.CardMode)); m == "rich" || m == "legacy" {
-			return m
-		}
-	}
-	return "legacy"
+	return s, "-c", p
 }
 
 // validatePermissive is like validate but skips the "at least one platform"
@@ -933,7 +704,7 @@ func (c *Config) validateInternal(permissive bool) error {
 				return fmt.Errorf("config: %s.platforms[%d].type is required", prefix, j)
 			}
 			if _, ok := supportedPlatformTypes[p.Type]; !ok {
-				return fmt.Errorf("config: %s.platforms[%d].type %q is unsupported; use feishu, lark, weixin, telegram, qq, or qqbot", prefix, j, p.Type)
+				return fmt.Errorf("config: %s.platforms[%d].type %q is unsupported; use weixin, telegram, or qq", prefix, j, p.Type)
 			}
 		}
 		if proj.ResetOnIdleMins != nil && *proj.ResetOnIdleMins < 0 {
@@ -966,13 +737,6 @@ func validateDisplayConfig(prefix string, display *DisplayConfig) error {
 			return fmt.Errorf("config: %s.mode must be \"full\", \"compact\", or \"quiet\"", prefix)
 		}
 	}
-	if display.CardMode != nil {
-		switch strings.ToLower(strings.TrimSpace(*display.CardMode)) {
-		case "legacy", "rich":
-		default:
-			return fmt.Errorf("config: %s.card_mode must be \"legacy\" or \"rich\"", prefix)
-		}
-	}
 	if display.HistoryMaxLen != nil && *display.HistoryMaxLen < 0 {
 		return fmt.Errorf("config: %s.history_max_len must be >= 0", prefix)
 	}
@@ -990,12 +754,11 @@ var supportedAgentTypes = map[string]struct{}{
 }
 
 var supportedPlatformTypes = map[string]struct{}{
-	"feishu": {}, "lark": {}, "weixin": {}, "telegram": {}, "qq": {}, "qqbot": {},
+	"weixin": {}, "telegram": {}, "qq": {},
 }
 
 var supportedReferencePlatforms = map[string]struct{}{
 	"all":    {},
-	"feishu": {},
 	"weixin": {},
 }
 
@@ -1086,336 +849,12 @@ func validateUsersConfig(prefix string, u *UsersConfig) error {
 	return nil
 }
 
-// SaveActiveProvider persists the active provider name for a project.
-// It uses surgical text editing to preserve comments and unknown fields.
-func SaveActiveProvider(projectName, providerName string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	return patchProjectAgentOption(projectName, "provider", providerName)
-}
-
-// SaveProviderModel persists the selected model for a provider in a project.
-// It first looks in the project's inline providers, then falls back to
-// global [[providers]] if the provider is referenced via provider_refs.
-// Uses surgical text editing to preserve comments and unknown fields.
-func SaveProviderModel(projectName, providerName, model string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if ConfigPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	raw := string(data)
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	projectIdx := -1
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == projectName {
-			projectIdx = i
-			break
-		}
-	}
-	if projectIdx < 0 {
-		return fmt.Errorf("project %q not found in config", projectName)
-	}
-
-	lines, hadTrailing := splitConfigLines(raw)
-	spans := buildRawProjectSpans(lines)
-	if projectIdx >= len(spans) {
-		return fmt.Errorf("project %q located in parsed config but not raw file", projectName)
-	}
-	projSpan := spans[projectIdx]
-
-	for j, prov := range cfg.Projects[projectIdx].Agent.Providers {
-		if prov.Name == providerName {
-			if j < len(projSpan.agentProviders) {
-				ps := projSpan.agentProviders[j]
-				lines = upsertTomlStringKey(lines, ps.start+1, ps.end, "model", model)
-				return writeRawConfig(joinConfigLines(lines, hadTrailing))
-			}
-			break
-		}
-	}
-
-	for _, ref := range cfg.Projects[projectIdx].Agent.ProviderRefs {
-		if ref == providerName {
-			return patchGlobalProviderField(lines, hadTrailing, cfg, providerName, "model", model)
-		}
-	}
-	return fmt.Errorf("provider %q not found in project %q", providerName, projectName)
-}
-
-func patchGlobalProviderField(lines []string, hadTrailing bool, cfg *Config, providerName, key, value string) error {
-	globalStarts := make([]int, 0, 4)
-	for i := range lines {
-		if matchTableHeader(lines[i], "[[providers]]") {
-			globalStarts = append(globalStarts, i)
-		}
-	}
-	for k, gp := range cfg.Providers {
-		if gp.Name != providerName || k >= len(globalStarts) {
-			continue
-		}
-		gstart := globalStarts[k]
-		gend := len(lines) - 1
-		if k+1 < len(globalStarts) {
-			gend = globalStarts[k+1] - 1
-		}
-		for j := gstart + 1; j <= gend; j++ {
-			if isAnyTableHeader(lines[j]) {
-				gend = j - 1
-				break
-			}
-		}
-		lines = upsertTomlStringKey(lines, gstart+1, gend, key, value)
-		return writeRawConfig(joinConfigLines(lines, hadTrailing))
-	}
-	return fmt.Errorf("global provider %q not found", providerName)
-}
-
 // SaveAgentModel persists the selected default model for a project's agent.
 // It uses surgical text editing to preserve comments and unknown fields.
 func SaveAgentModel(projectName, model string) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 	return patchProjectAgentOption(projectName, "model", model)
-}
-
-// AddProviderToConfig adds a provider to a project's agent config and saves.
-func AddProviderToConfig(projectName string, provider ProviderConfig) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if ConfigPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	found := false
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == projectName {
-			for _, existing := range cfg.Projects[i].Agent.Providers {
-				if existing.Name == provider.Name {
-					return fmt.Errorf("provider %q already exists in project %q", provider.Name, projectName)
-				}
-			}
-			cfg.Projects[i].Agent.Providers = append(cfg.Projects[i].Agent.Providers, provider)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("project %q not found in config", projectName)
-	}
-	return saveConfig(cfg)
-}
-
-// RemoveProviderFromConfig removes a provider from a project's agent config and saves.
-// For global providers referenced via provider_refs, it removes the reference
-// instead of deleting the global definition.
-func RemoveProviderFromConfig(projectName, providerName string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if ConfigPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	found := false
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name != projectName {
-			continue
-		}
-		// Check inline providers
-		providers := cfg.Projects[i].Agent.Providers
-		for j := range providers {
-			if providers[j].Name == providerName {
-				cfg.Projects[i].Agent.Providers = append(providers[:j], providers[j+1:]...)
-				found = true
-				break
-			}
-		}
-		// Also remove from provider_refs if present
-		refs := cfg.Projects[i].Agent.ProviderRefs
-		for j := range refs {
-			if refs[j] == providerName {
-				cfg.Projects[i].Agent.ProviderRefs = append(refs[:j], refs[j+1:]...)
-				found = true
-				break
-			}
-		}
-		break
-	}
-	if !found {
-		return fmt.Errorf("provider %q not found in project %q", providerName, projectName)
-	}
-	return saveConfig(cfg)
-}
-
-// ResolveProviderRefs merges global [[providers]] into each project that uses
-// provider_refs. Inline [[projects.agent.providers]] entries are appended after
-// resolved refs; if an inline entry has the same name as a global one, the
-// inline entry wins (override).
-func (cfg *Config) ResolveProviderRefs() {
-	if len(cfg.Providers) == 0 {
-		return
-	}
-	globalByName := make(map[string]ProviderConfig, len(cfg.Providers))
-	for _, p := range cfg.Providers {
-		globalByName[p.Name] = p
-	}
-	for i := range cfg.Projects {
-		refs := cfg.Projects[i].Agent.ProviderRefs
-		if len(refs) == 0 {
-			continue
-		}
-		agentType := cfg.Projects[i].Agent.Type
-		inlineNames := make(map[string]bool, len(cfg.Projects[i].Agent.Providers))
-		for _, p := range cfg.Projects[i].Agent.Providers {
-			inlineNames[p.Name] = true
-		}
-		var resolved []ProviderConfig
-		for _, name := range refs {
-			if inlineNames[name] {
-				continue // inline override takes precedence
-			}
-			gp, ok := globalByName[name]
-			if !ok {
-				slog.Warn("provider ref not found in global [[providers]]", "project", cfg.Projects[i].Name, "ref", name)
-				continue
-			}
-			if len(gp.AgentTypes) > 0 && !containsString(gp.AgentTypes, agentType) {
-				slog.Debug("skipping provider: agent type mismatch", "provider", name, "project", cfg.Projects[i].Name,
-					"provider_agents", gp.AgentTypes, "project_agent", agentType)
-				continue
-			}
-			resolved = append(resolved, gp.ResolveForAgent(agentType))
-		}
-		cfg.Projects[i].Agent.Providers = append(resolved, cfg.Projects[i].Agent.Providers...)
-	}
-}
-
-// ResolveForAgent applies per-agent-type overrides (Endpoints, AgentModels,
-// AgentModelLists) to a copy of the provider and returns it.
-func (p ProviderConfig) ResolveForAgent(agentType string) ProviderConfig {
-	if ep, ok := p.Endpoints[agentType]; ok && ep != "" {
-		p.BaseURL = ep
-	}
-	if am, ok := p.AgentModels[agentType]; ok && am != "" {
-		p.Model = am
-	}
-	if aml, ok := p.AgentModelLists[agentType]; ok && len(aml) > 0 {
-		p.Models = aml
-	}
-	return p
-}
-
-func containsString(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-// ── Global provider CRUD ───────────────────────────────────────
-
-// ListGlobalProviders returns the top-level [[providers]] list.
-func ListGlobalProviders() ([]ProviderConfig, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := loadLocked()
-	if err != nil {
-		return nil, err
-	}
-	return cfg.Providers, nil
-}
-
-// AddGlobalProvider appends a provider to the top-level [[providers]] and saves.
-func AddGlobalProvider(provider ProviderConfig) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := loadLocked()
-	if err != nil {
-		return err
-	}
-	for _, existing := range cfg.Providers {
-		if existing.Name == provider.Name {
-			return fmt.Errorf("global provider %q already exists", provider.Name)
-		}
-	}
-	cfg.Providers = append(cfg.Providers, provider)
-	return saveConfig(cfg)
-}
-
-// UpdateGlobalProvider replaces an existing global provider by name.
-func UpdateGlobalProvider(name string, provider ProviderConfig) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := loadLocked()
-	if err != nil {
-		return err
-	}
-	for i := range cfg.Providers {
-		if cfg.Providers[i].Name == name {
-			provider.Name = name // name is immutable in update
-			cfg.Providers[i] = provider
-			return saveConfig(cfg)
-		}
-	}
-	return fmt.Errorf("global provider %q not found", name)
-}
-
-// RemoveGlobalProvider removes a provider from top-level [[providers]] and
-// also strips the name from every project's provider_refs, then saves.
-func RemoveGlobalProvider(name string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := loadLocked()
-	if err != nil {
-		return err
-	}
-	found := false
-	for i := range cfg.Providers {
-		if cfg.Providers[i].Name == name {
-			cfg.Providers = append(cfg.Providers[:i], cfg.Providers[i+1:]...)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("global provider %q not found", name)
-	}
-	for i := range cfg.Projects {
-		refs := cfg.Projects[i].Agent.ProviderRefs
-		for j := 0; j < len(refs); j++ {
-			if refs[j] == name {
-				cfg.Projects[i].Agent.ProviderRefs = append(refs[:j], refs[j+1:]...)
-				break
-			}
-		}
-	}
-	return saveConfig(cfg)
 }
 
 func loadLocked() (*Config, error) {
@@ -1704,345 +1143,6 @@ func SaveDisplayConfig(mode *string, thinkingMessages *bool, thinkingMaxLen, too
 	return nil
 }
 
-// SaveTTSMode persists the TTS mode setting to the config file.
-// Uses surgical text editing to preserve comments and unknown fields.
-func SaveTTSMode(mode string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	return patchSectionField("tts", "tts_mode", quoteTomlString(mode))
-}
-
-// GetProjectProviders returns providers for a given project.
-func GetProjectProviders(projectName string) ([]ProviderConfig, string, error) {
-	if ConfigPath == "" {
-		return nil, "", fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return nil, "", fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return nil, "", fmt.Errorf("parse config: %w", err)
-	}
-	for _, p := range cfg.Projects {
-		if p.Name == projectName {
-			active, _ := p.Agent.Options["provider"].(string)
-			return p.Agent.Providers, active, nil
-		}
-	}
-	return nil, "", fmt.Errorf("project %q not found", projectName)
-}
-
-// FeishuCredentialUpdateOptions controls how Feishu/Lark platform credentials
-// are written back into config.toml for a specific project.
-type FeishuCredentialUpdateOptions struct {
-	ProjectName       string // required
-	PlatformIndex     int    // 1-based index among feishu/lark platforms in the project; 0 = first
-	PlatformType      string // optional target type: "feishu" or "lark"; empty keeps existing type
-	AppID             string // required
-	AppSecret         string // required
-	OwnerOpenID       string // optional owner id from onboarding flow
-	SetAllowFromEmpty bool   // when true, seed/append allow_from with OwnerOpenID while preserving "*"
-}
-
-// EnsureProjectWithFeishuOptions controls project auto-provisioning for Feishu/Lark setup.
-type EnsureProjectWithFeishuOptions struct {
-	ProjectName      string // required
-	PlatformType     string // optional: "feishu" or "lark", default "feishu"
-	CloneFromProject string // optional source project name to clone agent config from
-	WorkDir          string // optional default work_dir when creating project
-	AgentType        string // optional default agent type when no source project exists, default "codex"
-}
-
-// EnsureProjectWithFeishuResult describes whether project provisioning created a new project.
-type EnsureProjectWithFeishuResult struct {
-	Created          bool
-	AddedPlatform    bool
-	ProjectIndex     int
-	PlatformAbsIndex int // first feishu/lark platform in project, -1 if absent
-	PlatformType     string
-}
-
-// FeishuCredentialUpdateResult describes where credentials were written.
-type FeishuCredentialUpdateResult struct {
-	ProjectName      string
-	ProjectIndex     int
-	PlatformAbsIndex int // absolute index in projects[i].platforms
-	PlatformType     string
-	AllowFrom        string
-}
-
-// EnsureProjectWithFeishuPlatform ensures target project exists. If project does
-// not exist, it creates one with a Feishu/Lark platform so credentials can be
-// written immediately.
-func EnsureProjectWithFeishuPlatform(opts EnsureProjectWithFeishuOptions) (*EnsureProjectWithFeishuResult, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
-
-	if ConfigPath == "" {
-		return nil, fmt.Errorf("config path not set")
-	}
-	projectName := strings.TrimSpace(opts.ProjectName)
-	if projectName == "" {
-		return nil, fmt.Errorf("project name is required")
-	}
-
-	platformType := strings.ToLower(strings.TrimSpace(opts.PlatformType))
-	if platformType == "" {
-		platformType = "feishu"
-	}
-	if platformType != "feishu" && platformType != "lark" {
-		return nil, fmt.Errorf("invalid platform type %q (want feishu or lark)", opts.PlatformType)
-	}
-
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	raw := string(data)
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name != projectName {
-			continue
-		}
-		platformIdx := firstFeishuPlatformIndex(cfg.Projects[i].Platforms)
-		added := false
-		if platformIdx < 0 {
-			lines, hadTrailing := splitConfigLines(raw)
-			spans := buildRawProjectSpans(lines)
-			if i >= len(spans) {
-				return nil, fmt.Errorf("project %q located in parsed config but not raw file", projectName)
-			}
-			insertAt := spans[i].end + 1
-			block := make([]string, 0, 7)
-			if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
-				block = append(block, "")
-			}
-			block = append(block, "[[projects.platforms]]")
-			block = append(block, fmt.Sprintf("type = %s", quoteTomlString(platformType)))
-			block = append(block, "")
-			block = append(block, "[projects.platforms.options]")
-			if insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) != "" {
-				block = append(block, "")
-			}
-			lines = insertLines(lines, insertAt, block)
-			if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
-				return nil, err
-			}
-			platformIdx = len(cfg.Projects[i].Platforms)
-			added = true
-		}
-		return &EnsureProjectWithFeishuResult{
-			Created:          false,
-			AddedPlatform:    added,
-			ProjectIndex:     i,
-			PlatformAbsIndex: platformIdx,
-			PlatformType:     platformType,
-		}, nil
-	}
-
-	proj := ProjectConfig{
-		Name:      projectName,
-		Agent:     pickAgentTemplateForNewProject(cfg, opts),
-		Platforms: []PlatformConfig{{Type: platformType, Options: map[string]any{}}},
-	}
-	if proj.Agent.Type == "" {
-		proj.Agent.Type = "codex"
-	}
-	if proj.Agent.Options == nil {
-		proj.Agent.Options = map[string]any{}
-	}
-	workDir := strings.TrimSpace(opts.WorkDir)
-	if workDir != "" {
-		proj.Agent.Options["work_dir"] = workDir
-	}
-
-	lines, hadTrailing := splitConfigLines(raw)
-	if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
-		lines = append(lines, "")
-	}
-	lines = append(lines, "[[projects]]")
-	lines = append(lines, fmt.Sprintf("name = %s", quoteTomlString(proj.Name)))
-	lines = append(lines, "")
-	lines = append(lines, "[projects.agent]")
-	lines = append(lines, fmt.Sprintf("type = %s", quoteTomlString(proj.Agent.Type)))
-	lines = append(lines, "")
-	lines = append(lines, "[projects.agent.options]")
-	if wd, ok := proj.Agent.Options["work_dir"].(string); ok && strings.TrimSpace(wd) != "" {
-		lines = append(lines, fmt.Sprintf("work_dir = %s", quoteTomlString(wd)))
-	}
-	if mode, ok := proj.Agent.Options["mode"].(string); ok && strings.TrimSpace(mode) != "" {
-		lines = append(lines, fmt.Sprintf("mode = %s", quoteTomlString(mode)))
-	}
-	lines = append(lines, "")
-	lines = append(lines, "[[projects.platforms]]")
-	lines = append(lines, fmt.Sprintf("type = %s", quoteTomlString(platformType)))
-	lines = append(lines, "")
-	lines = append(lines, "[projects.platforms.options]")
-	if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
-		return nil, err
-	}
-
-	return &EnsureProjectWithFeishuResult{
-		Created:          true,
-		AddedPlatform:    false,
-		ProjectIndex:     len(cfg.Projects) - 1,
-		PlatformAbsIndex: len(cfg.Projects[len(cfg.Projects)-1].Platforms) - 1,
-		PlatformType:     platformType,
-	}, nil
-}
-
-// SaveFeishuPlatformCredentials updates app_id/app_secret for a project's
-// Feishu/Lark platform and persists the config atomically.
-func SaveFeishuPlatformCredentials(opts FeishuCredentialUpdateOptions) (*FeishuCredentialUpdateResult, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
-
-	if ConfigPath == "" {
-		return nil, fmt.Errorf("config path not set")
-	}
-	if strings.TrimSpace(opts.ProjectName) == "" {
-		return nil, fmt.Errorf("project name is required")
-	}
-	if strings.TrimSpace(opts.AppID) == "" || strings.TrimSpace(opts.AppSecret) == "" {
-		return nil, fmt.Errorf("app_id and app_secret are required")
-	}
-	if opts.PlatformIndex < 0 {
-		return nil, fmt.Errorf("platform index must be >= 0")
-	}
-	if opts.PlatformType != "" && opts.PlatformType != "feishu" && opts.PlatformType != "lark" {
-		return nil, fmt.Errorf("invalid platform type %q (want feishu or lark)", opts.PlatformType)
-	}
-
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	raw := string(data)
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-
-	projectIdx := -1
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == opts.ProjectName {
-			projectIdx = i
-			break
-		}
-	}
-	if projectIdx < 0 {
-		return nil, fmt.Errorf("project %q not found", opts.ProjectName)
-	}
-
-	proj := &cfg.Projects[projectIdx]
-	candidates := make([]int, 0, len(proj.Platforms))
-	for i := range proj.Platforms {
-		t := strings.ToLower(strings.TrimSpace(proj.Platforms[i].Type))
-		if t == "feishu" || t == "lark" {
-			candidates = append(candidates, i)
-		}
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("project %q has no feishu/lark platform", opts.ProjectName)
-	}
-
-	targetPos := 0
-	if opts.PlatformIndex > 0 {
-		targetPos = opts.PlatformIndex - 1
-	}
-	if targetPos < 0 || targetPos >= len(candidates) {
-		return nil, fmt.Errorf(
-			"platform index %d out of range: project %q has %d feishu/lark platform(s)",
-			opts.PlatformIndex, opts.ProjectName, len(candidates),
-		)
-	}
-
-	absIdx := candidates[targetPos]
-	platform := &proj.Platforms[absIdx]
-	if opts.PlatformType != "" {
-		platform.Type = opts.PlatformType
-	}
-	if platform.Options == nil {
-		platform.Options = map[string]any{}
-	}
-
-	platform.Options["app_id"] = strings.TrimSpace(opts.AppID)
-	platform.Options["app_secret"] = strings.TrimSpace(opts.AppSecret)
-
-	allowFrom := strings.TrimSpace(stringOption(platform.Options["allow_from"]))
-	if opts.SetAllowFromEmpty && strings.TrimSpace(opts.OwnerOpenID) != "" {
-		allowFrom = mergeAllowFromValue(allowFrom, strings.TrimSpace(opts.OwnerOpenID))
-		if allowFrom != "" {
-			platform.Options["allow_from"] = allowFrom
-		}
-	}
-
-	lines, hadTrailing := splitConfigLines(raw)
-	spans := buildRawProjectSpans(lines)
-	if projectIdx >= len(spans) {
-		return nil, fmt.Errorf("project %q located in parsed config but not raw file", opts.ProjectName)
-	}
-	if absIdx >= len(spans[projectIdx].platforms) {
-		return nil, fmt.Errorf("feishu/lark platform located in parsed config but not raw file")
-	}
-
-	reloadSpan := func() rawPlatformSpan {
-		spans = buildRawProjectSpans(lines)
-		return spans[projectIdx].platforms[absIdx]
-	}
-	span := spans[projectIdx].platforms[absIdx]
-
-	if opts.PlatformType != "" {
-		if span.typeLine >= 0 {
-			lines[span.typeLine] = replaceTomlStringKeyLine(lines[span.typeLine], "type", opts.PlatformType)
-		} else {
-			lines = insertLines(lines, span.start+1, []string{fmt.Sprintf("type = %s", quoteTomlString(opts.PlatformType))})
-		}
-		span = reloadSpan()
-	}
-
-	if span.optionsStart < 0 {
-		insertAt := span.end + 1
-		block := make([]string, 0, 4)
-		if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
-			block = append(block, "")
-		}
-		block = append(block, "[projects.platforms.options]")
-		if insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) != "" {
-			block = append(block, "")
-		}
-		lines = insertLines(lines, insertAt, block)
-		span = reloadSpan()
-	}
-
-	lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "app_id", strings.TrimSpace(opts.AppID))
-	span = reloadSpan()
-	lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "app_secret", strings.TrimSpace(opts.AppSecret))
-	span = reloadSpan()
-	if opts.SetAllowFromEmpty && strings.TrimSpace(opts.OwnerOpenID) != "" {
-		lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "allow_from", allowFrom)
-		span = reloadSpan()
-	}
-
-	if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
-		return nil, err
-	}
-
-	return &FeishuCredentialUpdateResult{
-		ProjectName:      opts.ProjectName,
-		ProjectIndex:     projectIdx,
-		PlatformAbsIndex: absIdx,
-		PlatformType:     platform.Type,
-		AllowFrom:        allowFrom,
-	}, nil
-}
-
 func stringOption(v any) string {
 	if s, ok := v.(string); ok {
 		return s
@@ -2095,16 +1195,6 @@ func mergeAllowFromValue(current, userID string) string {
 		return "*"
 	}
 	return strings.Join(merged, ",")
-}
-
-func firstFeishuPlatformIndex(platforms []PlatformConfig) int {
-	for i := range platforms {
-		t := strings.ToLower(strings.TrimSpace(platforms[i].Type))
-		if t == "feishu" || t == "lark" {
-			return i
-		}
-	}
-	return -1
 }
 
 func firstWeixinPlatformIndex(platforms []PlatformConfig) int {
@@ -2217,7 +1307,7 @@ func EnsureProjectWithWeixinPlatform(opts EnsureProjectWithWeixinOptions) (*Ensu
 
 	proj := ProjectConfig{
 		Name:      projectName,
-		Agent:     pickAgentTemplateForNewProject(cfg, EnsureProjectWithFeishuOptions{CloneFromProject: opts.CloneFromProject, WorkDir: opts.WorkDir, AgentType: opts.AgentType}),
+		Agent:     pickAgentTemplateForNewProject(cfg, newProjectAgentTemplate{CloneFromProject: opts.CloneFromProject, AgentType: opts.AgentType}),
 		Platforms: []PlatformConfig{{Type: "weixin", Options: map[string]any{}}},
 	}
 	if proj.Agent.Type == "" {
@@ -2415,7 +1505,13 @@ func SaveWeixinPlatformCredentials(opts WeixinCredentialUpdateOptions) (*WeixinC
 	}, nil
 }
 
-func pickAgentTemplateForNewProject(cfg *Config, opts EnsureProjectWithFeishuOptions) AgentConfig {
+// newProjectAgentTemplate selects the agent config used for a newly created project.
+type newProjectAgentTemplate struct {
+	CloneFromProject string
+	AgentType        string
+}
+
+func pickAgentTemplateForNewProject(cfg *Config, opts newProjectAgentTemplate) AgentConfig {
 	cloneName := strings.TrimSpace(opts.CloneFromProject)
 	if cloneName != "" {
 		for i := range cfg.Projects {
@@ -2443,36 +1539,6 @@ func cloneAgentConfig(in AgentConfig) AgentConfig {
 	out := AgentConfig{
 		Type:    in.Type,
 		Options: cloneAnyMap(in.Options),
-	}
-	if len(in.Providers) > 0 {
-		out.Providers = make([]ProviderConfig, len(in.Providers))
-		for i := range in.Providers {
-			p := ProviderConfig{
-				Name:        in.Providers[i].Name,
-				APIKey:      in.Providers[i].APIKey,
-				BaseURL:     in.Providers[i].BaseURL,
-				Model:       in.Providers[i].Model,
-				Models:      append([]ProviderModelConfig(nil), in.Providers[i].Models...),
-				Thinking:    in.Providers[i].Thinking,
-				Env:         cloneStringMap(in.Providers[i].Env),
-				Endpoints:   cloneStringMap(in.Providers[i].Endpoints),
-				AgentModels: cloneStringMap(in.Providers[i].AgentModels),
-			}
-			if len(in.Providers[i].AgentModelLists) > 0 {
-				p.AgentModelLists = make(map[string][]ProviderModelConfig, len(in.Providers[i].AgentModelLists))
-				for k, v := range in.Providers[i].AgentModelLists {
-					p.AgentModelLists[k] = append([]ProviderModelConfig(nil), v...)
-				}
-			}
-			if in.Providers[i].Codex != nil {
-				p.Codex = &CodexProviderConfig{
-					EnvKey:      in.Providers[i].Codex.EnvKey,
-					WireAPI:     in.Providers[i].Codex.WireAPI,
-					HTTPHeaders: cloneStringMap(in.Providers[i].Codex.HTTPHeaders),
-				}
-			}
-			out.Providers[i] = p
-		}
 	}
 	return out
 }
@@ -2619,13 +1685,6 @@ type rawProjectSpan struct {
 	agentEnd          int // last line before the next header or project end
 	agentOptionsStart int // [projects.agent.options] header; -1 if absent
 	agentOptionsEnd   int // last line of agent options section
-	agentProviders    []rawProviderSpan
-}
-
-type rawProviderSpan struct {
-	start    int // [[projects.agent.providers]] header
-	end      int
-	nameLine int // line with name = "..."
 }
 
 type rawPlatformSpan struct {
@@ -2683,7 +1742,7 @@ func buildRawProjectSpans(lines []string) []rawProjectSpan {
 		}
 
 		for ln := start + 1; ln <= end; ln++ {
-			if matchTableHeader(lines[ln], "[projects.agent]") && !matchTableHeader(lines[ln], "[projects.agent.options]") && !matchTableHeader(lines[ln], "[[projects.agent.providers]]") {
+			if matchTableHeader(lines[ln], "[projects.agent]") && !matchTableHeader(lines[ln], "[projects.agent.options]") {
 				span.agentStart = ln
 				span.agentEnd = end
 				for j := ln + 1; j <= end; j++ {
@@ -2702,22 +1761,6 @@ func buildRawProjectSpans(lines []string) []rawProjectSpan {
 						break
 					}
 				}
-			}
-			if matchTableHeader(lines[ln], "[[projects.agent.providers]]") {
-				provSpan := rawProviderSpan{start: ln, end: end, nameLine: -1}
-				for j := ln + 1; j <= end; j++ {
-					if isAnyTableHeader(lines[j]) {
-						provSpan.end = j - 1
-						break
-					}
-				}
-				for j := ln + 1; j <= provSpan.end; j++ {
-					if matchTomlStringKey(lines[j], "name") {
-						provSpan.nameLine = j
-						break
-					}
-				}
-				span.agentProviders = append(span.agentProviders, provSpan)
 			}
 		}
 
@@ -2944,43 +1987,7 @@ func SaveProjectSettings(projectName string, update ProjectSettingsUpdate) error
 		}
 		proj := &cfg.Projects[i]
 		if update.AgentType != nil && *update.AgentType != proj.Agent.Type {
-			newType := *update.AgentType
-			proj.Agent.Type = newType
-			// Filter out provider_refs incompatible with the new agent type.
-			globalByName := make(map[string]ProviderConfig, len(cfg.Providers))
-			for _, p := range cfg.Providers {
-				globalByName[p.Name] = p
-			}
-			var compatible []string
-			for _, ref := range proj.Agent.ProviderRefs {
-				gp, ok := globalByName[ref]
-				if !ok {
-					continue
-				}
-				if len(gp.AgentTypes) > 0 && !containsString(gp.AgentTypes, newType) {
-					slog.Info("removing incompatible provider ref on agent type change",
-						"project", projectName, "provider", ref,
-						"provider_agents", gp.AgentTypes, "new_agent", newType)
-					continue
-				}
-				compatible = append(compatible, ref)
-			}
-			proj.Agent.ProviderRefs = compatible
-			// Clear active provider if it was removed.
-			if opts := proj.Agent.Options; opts != nil {
-				if prov, ok := opts["provider"].(string); ok && prov != "" {
-					found := false
-					for _, ref := range compatible {
-						if ref == prov {
-							found = true
-							break
-						}
-					}
-					if !found {
-						delete(opts, "provider")
-					}
-				}
-			}
+			proj.Agent.Type = *update.AgentType
 		}
 		if update.AdminFrom != nil {
 			proj.AdminFrom = *update.AdminFrom
@@ -3121,36 +2128,9 @@ func GetProjectConfigDetails(projectName string) map[string]any {
 			platConfigs[j] = pc
 		}
 		result["platform_configs"] = platConfigs
-		if len(p.Agent.ProviderRefs) > 0 {
-			result["provider_refs"] = p.Agent.ProviderRefs
-		}
 		return result
 	}
 	return nil
-}
-
-// SaveProviderRefs updates provider_refs for a project.
-func SaveProviderRefs(projectName string, refs []string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if ConfigPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == projectName {
-			cfg.Projects[i].Agent.ProviderRefs = refs
-			return saveConfig(cfg)
-		}
-	}
-	return fmt.Errorf("project %q not found", projectName)
 }
 
 // RemoveProject removes a project from the config file.

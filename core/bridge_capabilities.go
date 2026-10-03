@@ -72,7 +72,7 @@ func (e *Engine) GetBridgePublishedCommands() []bridgePublishedCommand {
 		seen[c.id] = true
 		commands = append(commands, bridgePublishedCommand{
 			Name:              c.id,
-			Description:       e.i18n.T(MsgKey(c.id)),
+			Description:       c.id,
 			Source:            bridgeCommandSourceBuiltin,
 			RequiresWorkspace: false,
 			ArgsMode:          bridgeCommandArgsModeText,

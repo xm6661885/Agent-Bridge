@@ -34,9 +34,9 @@ func imageDecryptMaterial(img *imageItem) (encParam, aesKeyBase64 string, ok boo
 	return encParam, "", false
 }
 
-func (p *Platform) collectInboundMedia(ctx context.Context, items []messageItem) (images []core.ImageAttachment, files []core.FileAttachment, audio *core.AudioAttachment) {
+func (p *Platform) collectInboundMedia(ctx context.Context, items []messageItem) (images []core.ImageAttachment, files []core.FileAttachment) {
 	if p == nil || len(items) == 0 || strings.TrimSpace(p.cdnBaseURL) == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 	dlCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -129,10 +129,6 @@ func (p *Platform) collectInboundMedia(ctx context.Context, items []messageItem)
 			if v == nil || v.Media == nil {
 				continue
 			}
-			if strings.TrimSpace(v.Text) != "" {
-				// WeChat ASR text is enough when present; avoid STT path / duplicate handling.
-				continue
-			}
 			enc := strings.TrimSpace(v.Media.EncryptQueryParam)
 			keyB64 := strings.TrimSpace(v.Media.AESKey)
 			if enc == "" || keyB64 == "" || !tryEnc(enc) {
@@ -143,23 +139,13 @@ func (p *Platform) collectInboundMedia(ctx context.Context, items []messageItem)
 				slog.Warn("weixin: inbound voice CDN failed", "error", err)
 				continue
 			}
-			a := &core.AudioAttachment{
+			extraVoiceN++
+			files = append(files, core.FileAttachment{
 				MimeType: "audio/silk",
 				Data:     buf,
-				Format:   "silk",
-			}
-			if audio == nil {
-				audio = a
-			} else {
-				// core.Message carries one Audio; extra raw voice segments go as file attachments for the agent.
-				extraVoiceN++
-				files = append(files, core.FileAttachment{
-					MimeType: "audio/silk",
-					Data:     buf,
-					FileName: fmt.Sprintf("voice_%d.silk", extraVoiceN),
-				})
-			}
+				FileName: fmt.Sprintf("voice_%d.silk", extraVoiceN),
+			})
 		}
 	}
-	return images, files, audio
+	return images, files
 }
